@@ -7,6 +7,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# --- Packaging build metadata (created by `pip install -e .`) ---
+*.egg-info/
+
 # --- Secrets: real env file is never committed; the template is ---
 .env
 !.env.example
