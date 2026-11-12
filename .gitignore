@@ -1,0 +1,36 @@
+# --- Python virtual environments ---
+.venv/
+venv/
+
+# --- Python bytecode and test caches ---
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- Secrets: real env file is never committed; the template is ---
+.env
+!.env.example
+
+# --- Runtime document folders: ignore contents, keep the folders via .gitkeep ---
+data/inbox/*
+!data/inbox/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/failed/*
+!data/failed/.gitkeep
+
+# --- Local storage: vector store and databases ---
+data/chroma/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Editor and OS files (keep shared VS Code extension recommendations) ---
+.vscode/*
+!.vscode/extensions.json
+Thumbs.db
+desktop.ini
