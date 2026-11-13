@@ -11,3 +11,25 @@
   worked around once with truststore.
 - Step 2b: upgraded venv pip 24.0 -> 26.3; PyPI reachable without workaround.
 - Manual check: log line appears on console and in logs/app.log.
+
+## 2026-11-13 — Phase 2
+- Step 1: extraction.py with PyMuPDF 2.x, SHA-256 doc_id, per-page has_text.
+  (Claude Code started this step on its own after a resume prompt was pasted into
+  Claude Code by mistake; work was kept and reviewed.)
+- Review fix: needs_ocr changed from "any blank page" to "no page has text";
+  pages_without_text added. Verified on 6 real files (scanned, partly blank,
+  password-protected, fake, typed notes, renamed copy).
+- Found: notes contain Roman Urdu; console cp1252 cannot print emoji.
+- Step 2: compute_file_doc_id (streaming) and inbox.py scan_inbox with duplicate
+  detection; renamed copy flagged DUPLICATE_IN_SCAN. 54 tests passing.
+- Lesson: resume prompts go to claude.ai chat, never to Claude Code.
+
+## 2026-11-14 — Phase 3
+- Step 1: cleaning.py with clean_page_text (pure, idempotent) and clean_pages
+  (CleanedPage, page numbers preserved). 148 tests passing.
+- Review: Claude Code moved NFC after removals to keep idempotency
+  (zero-width char between letter and combining accent). A wrong test
+  expectation was fixed in the test, not the code.
+- Real-file check: ASCII-art diagrams lose alignment (accepted trade-off).
+- Fix: keep ZWJ/ZWNJ; handle U+2028/U+2029/U+0085; remove DEL and C1
+  controls. 161 tests passing.

@@ -41,5 +41,19 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - /ingest returns job_id immediately; /status/{job_id} reports progress
 - Golden evaluation set (10-15 questions) created in Phase 6, rerun after major changes
 
+## Ingestion details (Phase 2)
+- Inbox scan: list *.pdf (case-insensitive, non-recursive), stream-hash each file
+  into doc_id, classify NEW / DUPLICATE_IN_SCAN / ALREADY_KNOWN / ERROR.
+  Only NEW files go on to extraction. The scan never moves or deletes files.
+- Extraction: one read of the file bytes; doc_id and text come from the same bytes.
+  Per-page has_text; document needs_ocr only if no page has text.
+- Errors: unreadable / invalid / password-protected PDFs raise PdfExtractionError.
+
+## Cleaning details (Phase 3)
+- Page-level cleaning is pure and idempotent; it only normalises representation
+  (no lowercasing, no stopword removal, non-English text kept).
+- Output keeps one entry per page with the original page_number; empty pages kept.
+- Document-level cleaning (repeated headers/footers) is a separate step.
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

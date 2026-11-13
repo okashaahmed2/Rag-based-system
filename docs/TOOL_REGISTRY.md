@@ -10,7 +10,9 @@
 | logging | Logs (stdlib) | Phase 1 | Yes | Built in | - |
 | n8n | Workflow orchestration | Phase 9 | Yes | Installed via npm, not running | 2.14.2 |
 | Node.js / npm | Runtime for n8n | Phase 9 | Yes | Installed | 24.14.1 / 11.11.0 |
-| PyMuPDF | PDF text extraction | Phase 2 | Yes | Not installed | - |
+| PyMuPDF | PDF text extraction | Phase 2 | Yes | Installed (2.x, bundles layout/4llm) | 2.1 |
+| numpy | Dependency of PyMuPDF 2.x (also needed for embeddings) | Phase 2 | Yes | Installed | 2.4.6 |
+| onnxruntime | Dependency of PyMuPDF 2.x layout | Phase 2 | Indirect | Installed | 1.31.1 |
 | Sentence Transformers | Embeddings | Phase 4 | Yes | Not installed | - |
 | ChromaDB | Vector store | Phase 5 | Yes | Not installed | - |
 | SQLite | Status tracking (stdlib) | Phase 5 | Yes | Built in | - |
