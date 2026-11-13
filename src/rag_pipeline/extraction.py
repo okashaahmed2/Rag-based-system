@@ -75,6 +75,26 @@ def compute_doc_id(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def compute_file_doc_id(path: Path, chunk_size: int = 1_048_576) -> str:
+    """Return the document id of the file at ``path`` without loading it whole.
+
+    The file is streamed in ``chunk_size``-byte chunks into SHA-256, so the
+    result equals ``compute_doc_id(path.read_bytes())``. The PDF is not
+    opened or validated; only its raw bytes are hashed.
+
+    Raises:
+        ValueError: if ``chunk_size`` is not positive.
+        OSError: if the file cannot be opened or read.
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while chunk := file.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def extract_pdf(path: Path) -> ExtractedDocument:
     """Extract the raw text of every page of the PDF at ``path``.
 

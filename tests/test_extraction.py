@@ -13,6 +13,7 @@ from rag_pipeline.extraction import (
     ExtractedDocument,
     PdfExtractionError,
     compute_doc_id,
+    compute_file_doc_id,
     extract_pdf,
 )
 
@@ -35,6 +36,48 @@ def test_compute_doc_id_is_sha256_hex_of_bytes() -> None:
 
     assert doc_id == hashlib.sha256(data).hexdigest()
     assert len(doc_id) == 64
+
+
+def test_compute_file_doc_id_matches_compute_doc_id_for_multi_chunk_file(
+    tmp_path: Path,
+) -> None:
+    data = bytes(range(256)) * 20 + b"tail"  # 5124 bytes: several 1024-byte chunks
+    path = tmp_path / "big.bin"
+    path.write_bytes(data)
+
+    assert compute_file_doc_id(path, chunk_size=1024) == compute_doc_id(data)
+
+
+def test_compute_file_doc_id_streams_in_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "big.bin"
+    path.write_bytes(b"x" * 5000)
+    monkeypatch.setattr(
+        Path, "read_bytes", lambda self: pytest.fail("read_bytes must not be used")
+    )
+
+    assert compute_file_doc_id(path, chunk_size=1024) == compute_doc_id(b"x" * 5000)
+
+
+def test_compute_file_doc_id_of_empty_file(tmp_path: Path) -> None:
+    path = tmp_path / "empty.pdf"
+    path.write_bytes(b"")
+
+    assert compute_file_doc_id(path) == compute_doc_id(b"")
+
+
+def test_compute_file_doc_id_rejects_non_positive_chunk_size(tmp_path: Path) -> None:
+    path = tmp_path / "a.pdf"
+    path.write_bytes(b"data")
+
+    with pytest.raises(ValueError, match="chunk_size"):
+        compute_file_doc_id(path, chunk_size=0)
+
+
+def test_compute_file_doc_id_missing_file_raises_os_error(tmp_path: Path) -> None:
+    with pytest.raises(OSError):
+        compute_file_doc_id(tmp_path / "missing.pdf")
 
 
 def test_extract_pdf_returns_text_per_page_with_1_based_numbers(tmp_path: Path) -> None:
