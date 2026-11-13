@@ -9,6 +9,7 @@ description = "Local-first RAG document intelligence and knowledge extraction pi
 requires-python = ">=3.11"
 dependencies = [
     "pydantic-settings>=2,<3",
+    "pymupdf>=2.1,<3",
 ]
 
 [project.optional-dependencies]
