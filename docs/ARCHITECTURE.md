@@ -54,6 +54,8 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   (no lowercasing, no stopword removal, non-English text kept).
 - Output keeps one entry per page with the original page_number; empty pages kept.
 - Document-level cleaning (repeated headers/footers) is a separate step.
+- Document-level step removes repeated edge lines (constant headers, page-number
+  footers) after page-level cleaning; it runs once per document.
 
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

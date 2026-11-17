@@ -48,7 +48,7 @@ def test_decomposed_accent_is_composed_by_nfc() -> None:
 
 
 def test_nbsp_becomes_space() -> None:
-    assert clean_page_text("10 kg") == "10 kg"
+    assert clean_page_text("10\u00a0kg") == "10 kg"
 
 
 @pytest.mark.parametrize("space", sorted(SPACE_SEPARATORS))
@@ -65,21 +65,21 @@ def test_space_separator_table_matches_unicodedata() -> None:
     assert SPACE_SEPARATORS == zs - {" "}
 
 
-@pytest.mark.parametrize("char", ["​", "﻿", "­"])
+@pytest.mark.parametrize("char", ["\u200b", "\ufeff", "\u00ad"])
 def test_invisible_characters_are_removed(char: str) -> None:
     assert clean_page_text(f"data{char}base") == "database"
 
 
 def test_emoji_zwj_sequence_survives() -> None:
-    family = "\U0001f468‍\U0001f469‍\U0001f467‍\U0001f466"
+    family = "\U0001f468\u200d\U0001f469\u200d\U0001f467\u200d\U0001f466"
     assert clean_page_text(f"Family: {family}") == f"Family: {family}"
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "می‌کنم",  # Persian "mikonam" with ZWNJ
-        "بچوں ‌کا",  # Urdu text with ZWNJ
+        "می\u200cکنم",  # Persian "mikonam" with ZWNJ
+        "بچوں \u200cکا",  # Urdu text with ZWNJ
     ],
 )
 def test_zwnj_in_urdu_persian_survives(text: str) -> None:
@@ -100,7 +100,7 @@ def test_tab_is_kept_as_whitespace_not_removed() -> None:
 
 
 def test_removed_invisible_char_before_combining_mark_is_idempotent() -> None:
-    once = clean_page_text("e​́")
+    once = clean_page_text("e\u200b́")
     assert once == "é"
     assert clean_page_text(once) == once
 
@@ -120,17 +120,17 @@ def test_form_feed_and_vertical_tab_become_lf() -> None:
     assert clean_page_text("a\fb\vc") == "a\nb\nc"
 
 
-@pytest.mark.parametrize("char", [" ", "\u0085"])
+@pytest.mark.parametrize("char", ["\u2028", "\u0085"])
 def test_line_separator_and_nel_become_lf(char: str) -> None:
     assert clean_page_text(f"a{char}b") == "a\nb"
 
 
 def test_paragraph_separator_becomes_paragraph_break() -> None:
-    assert clean_page_text("a b") == "a\n\nb"
+    assert clean_page_text("a\u2029b") == "a\n\nb"
 
 
 def test_paragraph_separator_does_not_exceed_two_newlines() -> None:
-    assert clean_page_text("a\n \nb") == "a\n\nb"
+    assert clean_page_text("a\n\u2029\nb") == "a\n\nb"
 
 
 def test_crlf_blank_line_stays_one_paragraph_break() -> None:
@@ -210,7 +210,7 @@ def test_single_and_double_newlines_preserved() -> None:
     assert clean_page_text(text) == text
 
 
-@pytest.mark.parametrize("text", ["", " ", "\n\n\t ", " ​\r\n\f", "\x00"])
+@pytest.mark.parametrize("text", ["", " ", "\n\n\t ", "\u00a0\u200b\r\n\f", "\x00"])
 def test_empty_or_whitespace_only_returns_empty(text: str) -> None:
     assert clean_page_text(text) == ""
 
@@ -228,7 +228,7 @@ def test_page_is_stripped() -> None:
         "SVM kya hai?",
         "ڈیٹا سائنس",  # Urdu script
         "Great result \U0001f680\U0001f44d",
-        "Family: \U0001f468‍\U0001f469",
+        "Family: \U0001f468\u200d\U0001f469",
         "E = mc², H₂O, α ≤ β!",
         "UPPER lower MiXeD, punctuation: ;.?!()[]{}",
     ],
@@ -242,18 +242,18 @@ def test_meaningful_content_is_not_altered(text: str) -> None:
 MIXED_SAMPLES = [
     "",
     "plain text",
-    "﻿  Intro duction\r\n\r\n\r\n\r\nThe informa-\n  tion is​ here.\f",
+    "\ufeff  Intro\u00a0duction\r\n\r\n\r\n\r\nThe informa-\n  tion is\u200b here.\f",
     "COVID-\n19 and Data-\nScience\n\n\n\n- item\n-  item two  ",
-    "x² + ﬁle ­\tcafé\x00\n\n\nSVM kya hai? \U0001f680",
+    "x² + ﬁle \u00ad\tcafé\x00\n\n\nSVM kya hai? \U0001f680",
     "ab-\ncd-\nef\r\rgh\v\vij",
-    "e​́ a-\nété ڈیٹا",
+    "e\u200b́ a-\nété ڈیٹا",
     " \n \n \n ",
-    "a-\n​b",
+    "a-\n\u200bb",
     "a -\n\nb\n \n \nc",
-    "line next\u0085third para  \n\nend",
-    "del\x7f c1\x80\x90\x9f     ",
-    "\U0001f468‍\U0001f469 می‌کنم a-\n‌b",
-    "a- b x-\u0085y",
+    "line\u2028next\u0085third\u2029para\u2029\u2029\n\nend",
+    "del\x7f c1\x80\x90\x9f \u2028 \u2029 ",
+    "\U0001f468\u200d\U0001f469 می\u200cکنم a-\n\u200cb",
+    "a-\u2028b x-\u0085y",
 ]
 
 
@@ -275,7 +275,7 @@ def test_non_str_raises_type_error(value: object) -> None:
 def _pages() -> tuple[PageText, ...]:
     return (
         PageText(page_number=1, text="  First   page\r\n", has_text=True),
-        PageText(page_number=2, text="​ \n\n", has_text=True),
+        PageText(page_number=2, text="\u200b\u00a0\n\n", has_text=True),
         PageText(page_number=3, text="", has_text=False),
         PageText(page_number=4, text="informa-\ntion", has_text=True),
     )

@@ -82,6 +82,10 @@ Future local storage (`data/chroma/`, SQLite `*.db`, `logs/`) is git-ignored.
   No hard-coded paths, ports or model names in business logic.
 - No paid APIs or cloud services.
 - No new dependency without explicit approval from the user.
+- Edit source files with the Edit tool. Never rewrite source files with
+  shell heredocs, sed or ad-hoc scripts (they can corrupt escape sequences).
+- Write invisible or whitespace-like characters in source code as \uXXXX
+  escapes, never as literal characters.
 
 ## Agent workflow rules
 

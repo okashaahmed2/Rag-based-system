@@ -33,3 +33,15 @@
 - Real-file check: ASCII-art diagrams lose alignment (accepted trade-off).
 - Fix: keep ZWJ/ZWNJ; handle U+2028/U+2029/U+0085; remove DEL and C1
   controls. 161 tests passing.
+
+## 2026-11-18 — Phase 3
+- Step 2: remove_repeated_headers_footers (document-level, edge lines repeated
+  on >= 3 and >= 50% of text pages); HeaderFooterResult reports removed keys.
+- Review: digit normalisation deleted short-page content (e.g. slide titles
+  "Step 1"/"Step 2") -> split into EXACT and PAGE_NUMBER keys; only
+  page-number-like lines are compared with digits normalised.
+- Incident: a shell heredoc turned "\n" into real newlines in source files;
+  fixed with exact edits; rule added to AGENTS.md (Edit tool only).
+- Invisible literal characters in cleaning.py and tests replaced with escapes
+  (string values verified identical to before).
+- En/em dash page-number footers added. 224 tests passing.

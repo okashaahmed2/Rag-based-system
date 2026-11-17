@@ -4,7 +4,8 @@
 - Phase 1: COMPLETE
 - Phase 2 (PDF ingestion: PyMuPDF extraction, SHA-256 doc_id, needs_ocr, duplicate detection): COMPLETE
 - Phase 3 Step 1 (page-level text cleaning): COMPLETE
-- Next: Phase 3, Step 2 — repeated header/footer removal (document-level), start in a NEW session
+- Phase 3 Step 2 (repeated header/footer removal): COMPLETE
+- Next: Phase 3, Step 3 — page-aware chunking
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -21,7 +22,13 @@
 - clean_pages(): same count, order and page_numbers; empty pages kept
 - Real file (36-page notes): pages 36/36, numbers unchanged, chars
   19,581 -> 16,814, idempotent on all pages; Roman Urdu, math symbols, emoji intact
-- 161 pytest tests passing
+- remove_repeated_headers_footers(): EXACT keys (constant headers) and PAGE_NUMBER keys
+  (page-number-like lines only, via PAGE_NUMBER_KEY_PATTERN); edge region = first/last
+  2 non-empty lines; threshold >= 3 text pages and >= 50% of text pages; removal by
+  line index only in the matching region; empty pages kept; page_numbers preserved
+- Synthetic 8-page PDF: header + "Page N of 8" removed, all body kept, header/footer
+  extracted as first/last lines. All inbox PDFs: nothing wrongly removed
+- 224 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -30,6 +37,8 @@
 - OCR itself (Phase 13)
 - Ligature, invisible-character and hyphen-join rules on real PDF data (test PDF
   contained none; unit tests only)
+- Header/footer removal on a REAL PDF that has running headers/footers (only unit
+  tests + simple synthetic PDF so far)
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -38,9 +47,10 @@
 - src/rag_pipeline/logging_config.py: setup_logging()
 - src/rag_pipeline/extraction.py: extract_pdf, compute_doc_id, compute_file_doc_id, PdfExtractionError
 - src/rag_pipeline/inbox.py: scan_inbox, ScanStatus, InboxScanResult, InboxScanError
-- src/rag_pipeline/cleaning.py: clean_page_text, clean_pages, CleanedPage
+- src/rag_pipeline/cleaning.py: clean_page_text, clean_pages, CleanedPage;
+  remove_repeated_headers_footers, HeaderFooterResult, RepeatedKey, KeyKind
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
-  test_cleaning.py
+  test_cleaning.py, test_headers_footers.py
 - .env.example: settings template
 
 ## Key decisions
@@ -60,6 +70,9 @@
   self-esteem may be wrongly joined (accepted)
 - CleanedPage.has_text is a computed property
 - Header/footer removal is document-level, kept as a separate step
+- Two key kinds (EXACT / PAGE_NUMBER) to avoid deleting slide titles like "Step 1";
+  trade-offs: varying "Chapter N" headers kept, a lone "3.2" or year on >= 50% of
+  edge lines may be removed; function is designed to run once (not idempotent)
 
 ## Open questions
 - Notes contain Roman Urdu mixed with English (e.g. "SVM kya hai?"). Decide in Phase 4
@@ -82,5 +95,5 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - Test PDFs in data/inbox are git-ignored (local only)
 
 ## Next precise task
-Phase 3, Step 2: detect and remove repeated headers/footers and page-number-only lines
-across pages (document-level), keeping page numbers intact; tests.
+Phase 3, Step 3: page-aware chunking of cleaned pages (chunk size/overlap decided with
+the Phase 4 embedding model limit in mind); tests.
