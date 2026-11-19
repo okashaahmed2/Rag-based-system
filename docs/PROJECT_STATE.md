@@ -6,7 +6,9 @@
 - Phase 3 Step 1 (page-level text cleaning): COMPLETE
 - Phase 3 Step 2 (repeated header/footer removal): COMPLETE
 - Phase 3 Step 3 (page-aware chunking): COMPLETE
-- Next: Phase 3, Step 4 — chunk metadata + prepare_document()
+- Phase 3 Step 4 (chunk metadata + prepare_document): COMPLETE
+- Phase 3 (cleaning, header/footer removal, chunking, metadata): COMPLETE
+- Next: Phase 4, Step 1 — embeddings (start in a NEW session)
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -43,7 +45,15 @@
 - Hyphen joins on real data (research paper, see above)
 - Header/footer removal on real PDFs (research paper header + page numbers,
   lecture course header)
-- 314 pytest tests passing
+- prepare_document(): extract -> clean -> header/footer removal -> chunk ->
+  DocumentChunk(chunk_id=f"{doc_id}:{chunk_index}", doc_id, filename basename,
+  page_number, chunk_index, text, char_start, char_end); to_metadata() flat str/int,
+  no text; needs_ocr returns 0 chunks without an exception; PdfExtractionError propagates
+- Real files: research paper 19 chunks, slides 15 chunks, scanned needs_ocr True with
+  0 chunks, invalid and password PDFs raise PdfExtractionError, renamed copy has the
+  same doc_id and chunk_ids
+- Lecture07 slides 8/13 human check: both fine (text complete, readable order)
+- 329 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -53,7 +63,6 @@
 - Ligatures and invisible-character rules on real PDF data (no real PDF contained
   any yet; unit tests only)
 - Chunk token counts <= embedding model limit (check with the real tokenizer in Phase 4)
-- Extraction quality of diagram/table/code slides (Lecture07 slides 8 and 13 look suspect)
 - A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
@@ -67,8 +76,9 @@
   remove_repeated_headers_footers, HeaderFooterResult, RepeatedKey, KeyKind
 - src/rag_pipeline/chunking.py: chunk_pages, TextChunk
 - src/rag_pipeline/config.py also holds chunk_size / chunk_overlap (MIN_CHUNK_SIZE = 100)
+- src/rag_pipeline/preparation.py: prepare_document, PreparedDocument, DocumentChunk
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
-  test_cleaning.py, test_headers_footers.py, test_chunking.py
+  test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py
 - .env.example: settings template
 
 ## Key decisions
@@ -97,6 +107,13 @@
 - Recursive unit splitting: paragraph -> line -> sentence -> word -> hard cut
 - Sentence/word-aligned overlap inside the last chunk_overlap characters
 - chunk_pages() allows chunk_size >= 1 (small test sizes); Settings require >= 100
+- filename stored as basename only (files move inbox -> processed; doc_id is the identity)
+- Deterministic chunk_id "{doc_id}:{chunk_index}" for idempotent upsert in Phase 5
+- Chunk metadata is flat primitives (str/int) for the vector store
+- needs_ocr is a normal result (0 chunks), not an error
+- pages_without_text means "no text at extraction" (OCR candidates), not
+  "empty after cleaning"
+- Chunk settings recorded in PreparedDocument for reproducibility
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -118,8 +135,9 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   app.log is UTF-8 and unaffected. Revisit when text is logged to console.
 - Free RAM 6.6 GB at check time; review before choosing the Ollama model (Phase 7)
 - Test PDFs in data/inbox are git-ignored (local only)
+- Line endings: git LF->CRLF warnings on Windows; add .gitattributes in Phase 14.
 
 ## Next precise task
-Phase 3, Step 4: chunk metadata (DocumentChunk with doc_id, filename, page_number,
-chunk_index) and prepare_document() running extraction -> cleaning -> header/footer
-removal -> chunking for one PDF; tests.
+Phase 4, Step 1: install Sentence Transformers, load all-MiniLM-L6-v2 on CPU, verify
+its real max token length, and measure token counts of the real chunks (must fit the
+limit); no embedding storage yet.

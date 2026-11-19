@@ -60,3 +60,9 @@
 - A real two-column research paper and lecture slides were added to the inbox and
   checked (overlap, reading order, header removal, hyphen joins).
 - 314 tests passing.
+- Step 4: preparation.py with prepare_document, PreparedDocument and DocumentChunk
+  (chunk_id = "{doc_id}:{chunk_index}", flat to_metadata()).
+- Real-file check on all inbox PDFs (chunks, needs_ocr, PdfExtractionError, renamed
+  copy with identical doc_id and chunk_ids).
+- Human check of Lecture07 slides 8/13: both fine (text complete, readable order).
+- Phase 3 complete. 329 tests passing.

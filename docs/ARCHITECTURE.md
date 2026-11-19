@@ -71,5 +71,13 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - chunk_index is sequential 0..N-1 across the whole document; pages without text
   produce no chunks.
 
+## Document preparation (Phase 3)
+- prepare_document() chains extraction, cleaning, header/footer removal and chunking
+  for one PDF.
+- Chunk metadata: doc_id, filename, page_number, chunk_index, char_start, char_end.
+- chunk_id = "{doc_id}:{chunk_index}".
+- needs_ocr documents yield zero chunks (normal result, no exception).
+- Extraction errors (PdfExtractionError) propagate to the caller (job -> failed).
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434
