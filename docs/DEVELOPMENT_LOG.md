@@ -45,3 +45,18 @@
 - Invisible literal characters in cleaning.py and tests replaced with escapes
   (string values verified identical to before).
 - En/em dash page-number footers added. 224 tests passing.
+
+## 2026-11-19 — Phase 3
+- Step 3: chunking.py with chunk_pages (page-aware, character budget, recursive
+  unit splitting, exact slices) and TextChunk; RAG_CHUNK_SIZE / RAG_CHUNK_OVERLAP
+  settings with validation.
+- Review: overlap was silently 0 on long paragraphs (overlap built only from whole
+  trailing units; tests only checked overlap <= chunk_overlap) -> overlap now
+  starts at the earliest sentence start, else word start, inside the last
+  chunk_overlap characters.
+- A conditional assert made one test vacuous; rewritten with a deterministic input.
+- A scratchpad script named inspect.py shadowed the stdlib module and crashed
+  pydantic imports; renamed.
+- A real two-column research paper and lecture slides were added to the inbox and
+  checked (overlap, reading order, header removal, hyphen joins).
+- 314 tests passing.

@@ -25,6 +25,9 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 _PATH_FIELDS: tuple[str, ...] = ("inbox_dir", "processed_dir", "failed_dir", "log_dir")
 
+#: Smallest allowed ``chunk_size`` setting, in characters.
+MIN_CHUNK_SIZE = 100
+
 
 class Settings(BaseSettings):
     """Typed application settings.
@@ -46,6 +49,10 @@ class Settings(BaseSettings):
     failed_dir: Path = Path("data/failed")
     log_dir: Path = Path("logs")
     log_level: LogLevel = "INFO"
+    #: Maximum chunk length in characters (not tokens).
+    chunk_size: int = 800
+    #: Maximum overlap between consecutive chunks of a page, in characters.
+    chunk_overlap: int = 120
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -54,6 +61,21 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip().upper()
         return value
+
+    @model_validator(mode="after")
+    def _check_chunk_sizes(self) -> Settings:
+        """Require ``chunk_size >= MIN_CHUNK_SIZE`` and ``0 <= overlap < size``."""
+        if self.chunk_size < MIN_CHUNK_SIZE:
+            raise ValueError(
+                f"RAG_CHUNK_SIZE must be >= {MIN_CHUNK_SIZE} characters, "
+                f"got {self.chunk_size}"
+            )
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            raise ValueError(
+                "RAG_CHUNK_OVERLAP must be >= 0 and smaller than RAG_CHUNK_SIZE "
+                f"({self.chunk_size}), got {self.chunk_overlap}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _resolve_relative_paths(self) -> Settings:

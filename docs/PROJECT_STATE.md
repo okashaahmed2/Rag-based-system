@@ -5,7 +5,8 @@
 - Phase 2 (PDF ingestion: PyMuPDF extraction, SHA-256 doc_id, needs_ocr, duplicate detection): COMPLETE
 - Phase 3 Step 1 (page-level text cleaning): COMPLETE
 - Phase 3 Step 2 (repeated header/footer removal): COMPLETE
-- Next: Phase 3, Step 3 — page-aware chunking
+- Phase 3 Step 3 (page-aware chunking): COMPLETE
+- Next: Phase 3, Step 4 — chunk metadata + prepare_document()
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -28,17 +29,32 @@
   line index only in the matching region; empty pages kept; page_numbers preserved
 - Synthetic 8-page PDF: header + "Page N of 8" removed, all body kept, header/footer
   extracted as first/last lines. All inbox PDFs: nothing wrongly removed
-- 224 pytest tests passing
+- chunk_pages(): chunks never cross pages, len <= chunk_size, exact slices
+  (text == page_text[char_start:char_end]), full coverage of non-whitespace text,
+  sequential chunk_index; overlap starts at the earliest sentence start (else word
+  start) inside the last chunk_overlap characters of the previous chunk
+- Settings RAG_CHUNK_SIZE=800, RAG_CHUNK_OVERLAP=120 (characters) with validation
+  (size >= 100, 0 <= overlap < size)
+- Real data, two-column research paper: 4 pages, 19 chunks, 15/15 same-page pairs
+  overlap 82-120 chars, column-by-column reading order, 32 hyphen joins
+  (3 spot-checked correct), header "preprint. under review." and page numbers removed
+- Real data, lecture slides: 15 slides -> 15 chunks, course header removed from
+  14 slides, slide titles kept
+- Hyphen joins on real data (research paper, see above)
+- Header/footer removal on real PDFs (research paper header + page numbers,
+  lecture course header)
+- 314 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
 - ERROR status on a real locked/unreadable file (only simulated)
 - Memory use when hashing very large files
 - OCR itself (Phase 13)
-- Ligature, invisible-character and hyphen-join rules on real PDF data (test PDF
-  contained none; unit tests only)
-- Header/footer removal on a REAL PDF that has running headers/footers (only unit
-  tests + simple synthetic PDF so far)
+- Ligatures and invisible-character rules on real PDF data (no real PDF contained
+  any yet; unit tests only)
+- Chunk token counts <= embedding model limit (check with the real tokenizer in Phase 4)
+- Extraction quality of diagram/table/code slides (Lecture07 slides 8 and 13 look suspect)
+- A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -49,8 +65,10 @@
 - src/rag_pipeline/inbox.py: scan_inbox, ScanStatus, InboxScanResult, InboxScanError
 - src/rag_pipeline/cleaning.py: clean_page_text, clean_pages, CleanedPage;
   remove_repeated_headers_footers, HeaderFooterResult, RepeatedKey, KeyKind
+- src/rag_pipeline/chunking.py: chunk_pages, TextChunk
+- src/rag_pipeline/config.py also holds chunk_size / chunk_overlap (MIN_CHUNK_SIZE = 100)
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
-  test_cleaning.py, test_headers_footers.py
+  test_cleaning.py, test_headers_footers.py, test_chunking.py
 - .env.example: settings template
 
 ## Key decisions
@@ -73,11 +91,18 @@
 - Two key kinds (EXACT / PAGE_NUMBER) to avoid deleting slide titles like "Step 1";
   trade-offs: varying "Chapter N" headers kept, a lone "3.2" or year on >= 50% of
   edge lines may be removed; function is designed to run once (not idempotent)
+- Chunk size/overlap in characters (800/120, ~200 tokens, under the 256 word-piece
+  limit of all-MiniLM-L6-v2); tunable in Phase 6
+- Page-aware chunks (never cross pages) for clean page citations
+- Recursive unit splitting: paragraph -> line -> sentence -> word -> hard cut
+- Sentence/word-aligned overlap inside the last chunk_overlap characters
+- chunk_pages() allows chunk_size >= 1 (small test sizes); Settings require >= 100
 
 ## Open questions
-- Notes contain Roman Urdu mixed with English (e.g. "SVM kya hai?"). Decide in Phase 4
-  whether all-MiniLM-L6-v2 is enough or a multilingual model is needed; compare on the golden set.
-- Which language will questions be asked in (English, Roman Urdu, both)?
+- Questions will be asked in English; document types are lecture slides and
+  research papers (decided).
+- Roman Urdu notes: still to be checked with the Phase 6 golden set
+  (all-MiniLM-L6-v2 vs a multilingual model).
 
 ## Verified versions
 Python 3.11.9 | pip 26.3 | setuptools 65.5.0 | pydantic-settings 2.16.2 |
@@ -95,5 +120,6 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - Test PDFs in data/inbox are git-ignored (local only)
 
 ## Next precise task
-Phase 3, Step 3: page-aware chunking of cleaned pages (chunk size/overlap decided with
-the Phase 4 embedding model limit in mind); tests.
+Phase 3, Step 4: chunk metadata (DocumentChunk with doc_id, filename, page_number,
+chunk_index) and prepare_document() running extraction -> cleaning -> header/footer
+removal -> chunking for one PDF; tests.

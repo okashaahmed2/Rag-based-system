@@ -122,6 +122,63 @@ def test_settings_do_not_create_directories(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
+def test_chunk_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.chunk_size == 800
+    assert settings.chunk_overlap == 120
+
+
+def test_chunk_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_CHUNK_SIZE", "500")
+    monkeypatch.setenv("RAG_CHUNK_OVERLAP", "0")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.chunk_size == 500
+    assert settings.chunk_overlap == 0
+
+
+def test_chunk_size_minimum_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_CHUNK_SIZE", "100")
+    monkeypatch.setenv("RAG_CHUNK_OVERLAP", "99")
+
+    settings = Settings(_env_file=None)
+
+    assert (settings.chunk_size, settings.chunk_overlap) == (100, 99)
+
+
+@pytest.mark.parametrize(
+    ("size", "overlap", "message"),
+    [
+        ("99", "0", "RAG_CHUNK_SIZE must be >= 100"),
+        ("0", "0", "RAG_CHUNK_SIZE must be >= 100"),
+        ("-800", "0", "RAG_CHUNK_SIZE must be >= 100"),
+        ("800", "-1", "RAG_CHUNK_OVERLAP must be >= 0"),
+        ("800", "800", "RAG_CHUNK_OVERLAP must be >= 0"),
+        ("800", "900", "RAG_CHUNK_OVERLAP must be >= 0"),
+    ],
+)
+def test_invalid_chunk_settings_raise_clear_error(
+    size: str, overlap: str, message: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_CHUNK_SIZE", size)
+    monkeypatch.setenv("RAG_CHUNK_OVERLAP", overlap)
+
+    with pytest.raises(ValidationError, match=message):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("bad_value", ["eight hundred", "8.5", ""])
+def test_non_integer_chunk_size_raises(
+    bad_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_CHUNK_SIZE", bad_value)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     first = get_settings()
 

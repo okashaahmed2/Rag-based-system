@@ -57,5 +57,19 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - Document-level step removes repeated edge lines (constant headers, page-number
   footers) after page-level cleaning; it runs once per document.
 
+## Chunking details (Phase 3)
+- Page-aware: a chunk never crosses a page boundary, so every chunk cites one page.
+- Character budget from settings (RAG_CHUNK_SIZE=800, RAG_CHUNK_OVERLAP=120);
+  chunk_pages() itself is pure and takes both values as arguments.
+- Recursive unit splitting, only for units longer than chunk_size:
+  paragraph -> line -> sentence -> word -> hard cut. Units are packed greedily.
+- Exact slices: chunk text == page_text[char_start:char_end]; every non-whitespace
+  character of a page lies in at least one chunk.
+- Overlap: the next chunk starts at the earliest sentence start (else word start)
+  inside the last chunk_overlap characters of the previous chunk; no overlap after
+  a hard cut. Chunk starts and ends strictly increase (progress guarantee).
+- chunk_index is sequential 0..N-1 across the whole document; pages without text
+  produce no chunks.
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434
