@@ -59,7 +59,7 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 
 ## Chunking details (Phase 3)
 - Page-aware: a chunk never crosses a page boundary, so every chunk cites one page.
-- Character budget from settings (RAG_CHUNK_SIZE=800, RAG_CHUNK_OVERLAP=120);
+- Character budget from settings (RAG_CHUNK_SIZE=600, RAG_CHUNK_OVERLAP=120);
   chunk_pages() itself is pure and takes both values as arguments.
 - Recursive unit splitting, only for units longer than chunk_size:
   paragraph -> line -> sentence -> word -> hard cut. Units are packed greedily.
@@ -78,6 +78,17 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - chunk_id = "{doc_id}:{chunk_index}".
 - needs_ocr documents yield zero chunks (normal result, no exception).
 - Extraction errors (PdfExtractionError) propagate to the caller (job -> failed).
+
+## Embeddings (Phase 4)
+- Model: sentence-transformers/all-MiniLM-L6-v2, 384-dimensional embeddings, CPU.
+- Input limit: 256 word-piece tokens including [CLS]/[SEP]; longer input is silently
+  truncated (verified: the embedding of a 298-token chunk equals that of its first
+  254 tokens).
+- chunk_size is in characters, not tokens; it was set to 600 (overlap 120) from real
+  token measurements so that every measured chunk fits 256 tokens (max 241).
+- The same model is used for ingestion and query.
+- Re-ingestion deletes all old chunks by doc_id before inserting, because
+  chunk_index (and so chunk_id) points to different text when chunk settings change.
 
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

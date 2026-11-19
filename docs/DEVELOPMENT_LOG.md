@@ -66,3 +66,24 @@
   copy with identical doc_id and chunk_ids).
 - Human check of Lecture07 slides 8/13: both fine (text complete, readable order).
 - Phase 3 complete. 329 tests passing.
+
+## 2026-11-19 — Phase 4
+- Step 1: installed sentence-transformers 6.3.0 (pulls torch 2.15.0+cpu,
+  transformers 5.23.0, tokenizers 0.23.3, huggingface-hub 2.4.0; setuptools upgraded
+  65.5.0 -> 84.2.1). No SSL problems. all-MiniLM-L6-v2 loads on CPU: 384 dims,
+  max_seq_length 256 (model README: "input text longer than 256 word pieces is
+  truncated"; trained at 128 tokens). Model cache ~87 MB; HF symlink warning on
+  Windows (degraded cache, harmless). Added scripts/measure_chunk_tokens.py
+  (real tokenizer, special tokens included, no truncation). Token report at
+  800/120: 110 chunks, median 122, p95 214, max 298, 2 chunks over 256 (both in the
+  research paper, table-heavy text), 51 over 128.
+- Step 1b: truncation proven on the 298-token chunk: cos(full, first 254 tokens) =
+  1.000000 with max diff 0.0, cos(full, tail) = 0.40 -> the tail is silently ignored.
+  chunk_size default 800 -> 600 (overlap 120 unchanged) in config.py and
+  .env.example; one default test updated. At 600/120: 129 chunks, median 116,
+  p95 177, max 241, 0 over 256, 48 over 128. Script now also reports "over 128".
+- Lesson: a chunk_size cap changes only the long tail of the token distribution
+  (max 298 -> 241, p95 214 -> 177), while the median barely moves (122 -> 116) and
+  most chunks over 128 stay over it (51 -> 48).
+- Step 1c: pinned sentence-transformers>=6.3,<7 (reinstall changed no packages),
+  docs updated, committed and pushed. 329 tests passing.

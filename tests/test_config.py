@@ -125,7 +125,7 @@ def test_settings_do_not_create_directories(tmp_path: Path) -> None:
 def test_chunk_settings_defaults() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.chunk_size == 800
+    assert settings.chunk_size == 600
     assert settings.chunk_overlap == 120
 
 

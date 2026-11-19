@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     log_dir: Path = Path("logs")
     log_level: LogLevel = "INFO"
     #: Maximum chunk length in characters (not tokens).
-    chunk_size: int = 800
+    chunk_size: int = 600
     #: Maximum overlap between consecutive chunks of a page, in characters.
     chunk_overlap: int = 120
 

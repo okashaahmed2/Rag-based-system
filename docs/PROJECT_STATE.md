@@ -8,7 +8,8 @@
 - Phase 3 Step 3 (page-aware chunking): COMPLETE
 - Phase 3 Step 4 (chunk metadata + prepare_document): COMPLETE
 - Phase 3 (cleaning, header/footer removal, chunking, metadata): COMPLETE
-- Next: Phase 4, Step 1 — embeddings (start in a NEW session)
+- Phase 4 Step 1 (Sentence Transformers install, real token measurement, chunk_size 600): COMPLETE
+- Next: Phase 4, Step 2 — embeddings module
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -35,8 +36,8 @@
   (text == page_text[char_start:char_end]), full coverage of non-whitespace text,
   sequential chunk_index; overlap starts at the earliest sentence start (else word
   start) inside the last chunk_overlap characters of the previous chunk
-- Settings RAG_CHUNK_SIZE=800, RAG_CHUNK_OVERLAP=120 (characters) with validation
-  (size >= 100, 0 <= overlap < size)
+- Settings RAG_CHUNK_SIZE=600 (was 800 until Phase 4 Step 1), RAG_CHUNK_OVERLAP=120
+  (characters) with validation (size >= 100, 0 <= overlap < size)
 - Real data, two-column research paper: 4 pages, 19 chunks, 15/15 same-page pairs
   overlap 82-120 chars, column-by-column reading order, 32 hyphen joins
   (3 spot-checked correct), header "preprint. under review." and page numbers removed
@@ -53,6 +54,13 @@
   0 chunks, invalid and password PDFs raise PdfExtractionError, renamed copy has the
   same doc_id and chunk_ids
 - Lecture07 slides 8/13 human check: both fine (text complete, readable order)
+- all-MiniLM-L6-v2 loads on CPU (torch +cpu), 384-dim, max_seq_length 256;
+  model README says trained at 128 tokens; warm load ~0.4 s, encode ~0.03 s
+- Silent truncation proven: chunk over 256 tokens -> cos(full, first 254 tokens) =
+  1.000000, max diff 0.0; cos(full, tail) = 0.40
+- Token report at 800/120: 110 chunks, max 298, 2 over 256, 51 over 128
+- Token report at 600/120: 129 chunks, median 116, p95 177, max 241, 0 over 256,
+  48 over 128
 - 329 pytest tests passing
 
 ## Not yet verified / incomplete
@@ -62,7 +70,9 @@
 - OCR itself (Phase 13)
 - Ligatures and invisible-character rules on real PDF data (no real PDF contained
   any yet; unit tests only)
-- Chunk token counts <= embedding model limit (check with the real tokenizer in Phase 4)
+- Retrieval quality at 600 vs 800 (Phase 6 golden set)
+- Denser PDFs may exceed 256 tokens at 600 chars (worst ~2.4 chars/token seen)
+- HF model download on a fresh machine / behind a proxy
 - A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
@@ -80,6 +90,7 @@
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py
 - .env.example: settings template
+- scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -101,8 +112,8 @@
 - Two key kinds (EXACT / PAGE_NUMBER) to avoid deleting slide titles like "Step 1";
   trade-offs: varying "Chapter N" headers kept, a lone "3.2" or year on >= 50% of
   edge lines may be removed; function is designed to run once (not idempotent)
-- Chunk size/overlap in characters (800/120, ~200 tokens, under the 256 word-piece
-  limit of all-MiniLM-L6-v2); tunable in Phase 6
+- Chunk size/overlap in characters (originally 800/120, ~200 tokens estimated;
+  replaced in Phase 4 Step 1 by 600/120 from real token measurements, see below)
 - Page-aware chunks (never cross pages) for clean page citations
 - Recursive unit splitting: paragraph -> line -> sentence -> word -> hard cut
 - Sentence/word-aligned overlap inside the last chunk_overlap characters
@@ -114,6 +125,13 @@
 - pages_without_text means "no text at extraction" (OCR candidates), not
   "empty after cleaning"
 - Chunk settings recorded in PreparedDocument for reproducibility
+- Embedding model all-MiniLM-L6-v2 (English docs and questions)
+- chunk_size 600 / overlap 120 chars so all real chunks fit 256 tokens; final tuning
+  on the golden set in Phase 6
+- A chunk_size cap only affects the long tail of the token distribution, not the median
+- Changing chunk settings changes what each chunk_id points to -> re-ingest must
+  delete old chunks by doc_id before inserting (no orphan chunks)
+- sentence-transformers pinned >=6.3,<7
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -122,8 +140,11 @@
   (all-MiniLM-L6-v2 vs a multilingual model).
 
 ## Verified versions
-Python 3.11.9 | pip 26.3 | setuptools 65.5.0 | pydantic-settings 2.16.2 |
+Python 3.11.9 | pip 26.3 | setuptools 84.2.1 (upgraded from 65.5.0 by the
+sentence-transformers install) | pydantic-settings 2.16.2 |
 pydantic 2.14.3 | pytest 9.2.0 | pymupdf 2.1 | numpy 2.4.6 | onnxruntime 1.31.1 |
+sentence-transformers 6.3.0 | torch 2.15.0+cpu | transformers 5.23.0 |
+tokenizers 0.23.3 | huggingface-hub 2.4.0 |
 git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2
 
 ## Hardware (verified)
@@ -136,8 +157,14 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - Free RAM 6.6 GB at check time; review before choosing the Ollama model (Phase 7)
 - Test PDFs in data/inbox are git-ignored (local only)
 - Line endings: git LF->CRLF warnings on Windows; add .gitattributes in Phase 14.
+- Only 15-token margin at 600 (max 241) -> token guard needed in Phase 4 Step 2
+- HF Hub contacted on every model load unless HF_HUB_OFFLINE=1 (decide in Step 2)
+- HF symlink warning on Windows (degraded cache, harmless)
+- get_sentence_embedding_dimension renamed to get_embedding_dimension
+  (old name gives a FutureWarning)
 
 ## Next precise task
-Phase 4, Step 1: install Sentence Transformers, load all-MiniLM-L6-v2 on CPU, verify
-its real max token length, and measure token counts of the real chunks (must fit the
-limit); no embedding storage yet.
+Phase 4, Step 2: src/rag_pipeline/embeddings.py — embedding model name in Settings,
+load the model once, embed_chunks() returning 384-dim vectors, token-count guard that
+logs a warning for chunks over max_seq_length, unit tests with a stub model (no
+download in tests); no vector storage yet.
