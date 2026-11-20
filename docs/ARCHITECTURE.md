@@ -31,8 +31,11 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - ChromaDB: chunk-level data (vector, chunk text, flat metadata); collection
   metadata holds embedding_model and embedding_dim
 - Distance: cosine (Chroma returns distance = 1 - cosine similarity)
-- SQLite: doc_id, filename, file_hash, status
-  (pending/processing/done/failed/needs_ocr), error_message, attempts, timestamps
+- SQLite: documents table with doc_id (= SHA-256 file hash), filename, status
+  (pending/processing/done/failed/needs_ocr), error_message, attempts, chunk_count,
+  timestamps. State machine: new -> pending; pending | failed -> processing;
+  processing -> done | needs_ocr | failed. Interrupted processing rows are recovered
+  to failed at startup. Jobs table in Phase 8.
 
 ## Design rules
 - doc_id = SHA-256 of PDF bytes; duplicates detected from Phase 2

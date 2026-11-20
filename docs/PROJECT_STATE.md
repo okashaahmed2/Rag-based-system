@@ -12,8 +12,9 @@
 - Phase 4 Step 2 (embeddings module): COMPLETE
 - Phase 4 (embeddings): COMPLETE (commit f77f604)
 - Phase 5 Step 1a (ChromaDB install + spike): COMPLETE (commit 07f9e3b)
-- Phase 5 Step 1b (vector_store.py + tests + real smoke check): COMPLETE
-- Next: Phase 5 Step 1c — SQLite document/job status
+- Phase 5 Step 1b (vector_store.py + tests + real smoke check): COMPLETE (commit 2116068)
+- Phase 5 Step 1c (SQLite document status store + tests): COMPLETE
+- Next: Phase 5 Step 2 — ingestion orchestration for one document
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -123,7 +124,28 @@
   skipped with PdfExtractionError; "What is a decision tree?" -> top-1 Lecture07
   page 4, similarity 0.838088 (Phase 4: 0.838), then pages 5/3/2/14 at 0.580-0.560;
   re-run replace of SVM: 43 -> 43, total 86 -> 86
-- 406 pytest tests passing
+- status_db.py (63 tests, real SQLite file in tmp_path, fake clock): initialize
+  creates folder/table/index, user_version 1, twice harmless, version 2 -> error;
+  constructor touches nothing; use before initialize -> StatusStoreError and no
+  file created (read-write URI open); pending -> processing -> done (chunk_count,
+  updated_at increases, created_at kept), needs_ocr (0), failed (message stripped),
+  retry clears error and attempts 2; all 12 invalid state/action pairs and 4 unknown
+  doc_id actions raise and leave the row unchanged; register of an existing doc
+  returns it unchanged; known_doc_ids matrix for max_attempts 1/2/3; recover_interrupted
+  changes only processing rows (count 3, attempts kept, idempotent), then retryable
+  or known by attempts; new StatusStore on the same file sees the data; CHECK
+  constraints reject bad status / negative attempts / negative chunk_count via raw
+  SQL; quotes, SQL-injection-like text, Roman Urdu, emoji and Urdu script round-trip;
+  message > 2000 chars trimmed, empty rejected; naive clock rejected; non-UTC clock
+  stored as UTC ("2026-11-20T12:00:00.000000+00:00"); db file deletable in the same
+  process after use incl. a failed transition (connections closed on Windows);
+  scan_inbox(known_doc_ids=store.known_doc_ids(3)) -> done and 3-attempt failed
+  ALREADY_KNOWN, 2-attempt failed and unregistered NEW
+- Settings RAG_STATUS_DB_PATH (default data/status.db, resolved under project root;
+  ignored by the existing .gitignore rule *.db) and RAG_MAX_INGEST_ATTEMPTS
+  (default 3, >= 1)
+- SQLite library 3.45.1 (Python 3.11.9 stdlib sqlite3)
+- 474 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -144,6 +166,8 @@
   small limits only)
 - A real Chroma failure between delete and upsert (no fault injection yet)
 - Concurrent writers to the same store (single process assumed)
+- SQLite under concurrent access (busy timeout 5 s set, never exercised)
+- Status store on the real data/status.db (tests use tmp_path only)
 - A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
@@ -161,12 +185,16 @@
 - src/rag_pipeline/embeddings.py: load_embedding_model, count_tokens, embed_chunks,
   embed_query, ChunkEmbeddings, EmbeddingModel, EmbeddingError
 - src/rag_pipeline/config.py also holds embedding_model_name, embedding_batch_size,
-  embedding_local_files_only, chroma_path, chroma_collection_name
+  embedding_local_files_only, chroma_path, chroma_collection_name, status_db_path,
+  max_ingest_attempts
 - src/rag_pipeline/vector_store.py: open_collection, replace_document_chunks,
   count_document_chunks, query_by_embedding, RetrievedChunk, VectorStoreError
+- src/rag_pipeline/status_db.py: StatusStore (initialize, register_document,
+  mark_processing/done/needs_ocr/failed, get_document, list_documents,
+  known_doc_ids, recover_interrupted), DocumentRecord, DocumentStatus, StatusStoreError
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
-  test_embeddings.py, test_vector_store.py
+  test_embeddings.py, test_vector_store.py, test_status_db.py
 - .env.example: settings template
 - .env (local, git-ignored): only overrides (RAG_EMBEDDING_LOCAL_FILES_ONLY=true)
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
@@ -237,6 +265,23 @@
   collection._client (private Chroma attribute, covered by tests)
 - The legacy-embedding-function DeprecationWarning is suppressed only locally around
   the one configuration read in open_collection
+- SQLite status: no file_hash column (doc_id IS the SHA-256 file hash); documents
+  table only, jobs table in Phase 8
+- State machine: new -> pending; pending | failed -> processing (attempts + 1, error
+  cleared); processing -> done (chunk_count) | needs_ocr (0) | failed (error, max
+  2000 chars); anything else raises and changes nothing
+- Each transition is one literal conditional UPDATE (WHERE doc_id = ? AND status IN
+  (...)) inside BEGIN IMMEDIATE; rowcount 0 -> error naming the current status
+- known_doc_ids(max_attempts) = done, needs_ocr, processing, failed with attempts >=
+  max; pending and failed below max are retried
+- processing is skipped at runtime and recovered at startup: recover_interrupted()
+  turns every processing row into failed ("interrupted: ..."), attempts unchanged
+- register_document never resets an existing row (a renamed copy keeps the first
+  filename and status)
+- One short-lived connection per call, closed with contextlib.closing (Windows file
+  locks); non-initialize calls open the file read-write via URI so a missing database
+  is an error, not a silently created empty file
+- Timestamps: UTC ISO 8601 with offset and microseconds; clock injectable for tests
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -287,8 +332,12 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   processing/failed until the replace returns, and a re-run fixes it
 - vector_store reads the batch limit through the private collection._client; a
   chromadb upgrade may break it (test_batch_size_is_capped_by_client_limit catches it)
+- recover_interrupted assumes a single process: running it while another process is
+  ingesting would mark that live work failed
+- A document stuck in processing is invisible to scans until the next startup
+  recovery
 
 ## Next precise task
-Phase 5 Step 1c — SQLite document/job status store (documents table with doc_id,
-filename, status pending/processing/done/failed/needs_ocr, error_message, attempts,
-timestamps) with tests; no ingestion orchestration yet.
+Phase 5 Step 2 — ingestion orchestration for one document: register -> processing ->
+prepare_document -> embed -> replace_document_chunks -> done / needs_ocr / failed,
+with startup recovery and tests.

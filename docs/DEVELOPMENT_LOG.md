@@ -157,3 +157,14 @@
   similarity 0.838088 (same as Phase 4). Re-run replace: 43 -> 43, total 86 -> 86.
 - Found: the smoke check's first expectation (collection count 129) was wrong: 129
   counts the duplicate copy; the store correctly holds 86.
+- Step 1b committed 2116068 and pushed. 406 tests passing.
+- Step 1c: status_db.py with StatusStore (documents table, CHECK constraints, status
+  index, user_version 1), state machine pending -> processing -> done / needs_ocr /
+  failed with retry failed -> processing, each transition one literal conditional
+  UPDATE in BEGIN IMMEDIATE, known_doc_ids(max_attempts) for scan_inbox,
+  recover_interrupted() for startup. Settings RAG_STATUS_DB_PATH (data/status.db,
+  covered by *.db) and RAG_MAX_INGEST_ATTEMPTS (3). 63 status_db + 5 config tests,
+  incl. scan_inbox integration and deleting the db file in the same process.
+  474 tests passing.
+- Found: data/status.db-journal was not covered by .gitignore; added *.db-journal,
+  *.db-wal, *.db-shm.

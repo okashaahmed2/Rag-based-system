@@ -214,6 +214,43 @@ def test_empty_chroma_collection_name_raises(
         Settings(_env_file=None)
 
 
+def test_status_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.status_db_path == PROJECT_ROOT / "data" / "status.db"
+    assert settings.max_ingest_attempts == 3
+
+
+def test_status_settings_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_STATUS_DB_PATH", str(tmp_path / "s.db"))
+    monkeypatch.setenv("RAG_MAX_INGEST_ATTEMPTS", "1")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.status_db_path == tmp_path / "s.db"
+    assert settings.max_ingest_attempts == 1
+
+
+def test_relative_status_db_path_resolves_under_project_root(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None, project_root=tmp_path, status_db_path=Path("db/x.db")
+    )
+
+    assert settings.status_db_path == tmp_path / "db" / "x.db"
+
+
+@pytest.mark.parametrize("bad_value", ["0", "-1"])
+def test_invalid_max_ingest_attempts_raises(
+    bad_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_MAX_INGEST_ATTEMPTS", bad_value)
+
+    with pytest.raises(ValidationError, match="RAG_MAX_INGEST_ATTEMPTS must be >= 1"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     first = get_settings()
 

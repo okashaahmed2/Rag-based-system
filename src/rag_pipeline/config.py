@@ -29,6 +29,7 @@ _PATH_FIELDS: tuple[str, ...] = (
     "failed_dir",
     "log_dir",
     "chroma_path",
+    "status_db_path",
 )
 
 #: Smallest allowed ``chunk_size`` setting, in characters.
@@ -69,6 +70,10 @@ class Settings(BaseSettings):
     chroma_path: Path = Path("data/chroma")
     #: Name of the ChromaDB collection holding the document chunks.
     chroma_collection_name: str = "chunks"
+    #: SQLite file holding the document status register.
+    status_db_path: Path = Path("data/status.db")
+    #: Failed documents are retried until they have this many attempts.
+    max_ingest_attempts: int = 3
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -94,6 +99,14 @@ class Settings(BaseSettings):
         if not name:
             raise ValueError("RAG_CHROMA_COLLECTION_NAME must not be empty")
         return name
+
+    @field_validator("max_ingest_attempts")
+    @classmethod
+    def _check_max_ingest_attempts(cls, value: int) -> int:
+        """Require ``max_ingest_attempts >= 1``."""
+        if value < 1:
+            raise ValueError(f"RAG_MAX_INGEST_ATTEMPTS must be >= 1, got {value}")
+        return value
 
     @model_validator(mode="after")
     def _check_chunk_sizes(self) -> Settings:
