@@ -28,7 +28,9 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - n8n: orchestration only (scheduling, triggering, notifications)
 - Python: all processing and application logic
 - FastAPI: interface between n8n/users and Python
-- ChromaDB: vectors and chunk metadata only
+- ChromaDB: chunk-level data (vector, chunk text, flat metadata); collection
+  metadata holds embedding_model and embedding_dim
+- Distance: cosine (Chroma returns distance = 1 - cosine similarity)
 - SQLite: doc_id, filename, file_hash, status
   (pending/processing/done/failed/needs_ocr), error_message, attempts, timestamps
 

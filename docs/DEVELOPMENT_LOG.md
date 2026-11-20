@@ -65,7 +65,7 @@
 - Real-file check on all inbox PDFs (chunks, needs_ocr, PdfExtractionError, renamed
   copy with identical doc_id and chunk_ids).
 - Human check of Lecture07 slides 8/13: both fine (text complete, readable order).
-- Phase 3 complete. 329 tests passing.
+- Phase 3 complete. 329 tests passing. Commit 10f2a29.
 
 ## 2026-11-19 — Phase 4
 - Step 1: installed sentence-transformers 6.3.0 (pulls torch 2.15.0+cpu,
@@ -86,7 +86,7 @@
   (max 298 -> 241, p95 214 -> 177), while the median barely moves (122 -> 116) and
   most chunks over 128 stay over it (51 -> 48).
 - Step 1c: pinned sentence-transformers>=6.3,<7 (reinstall changed no packages),
-  docs updated, committed and pushed. 329 tests passing.
+  docs updated, committed 8e2bb22 and pushed. 329 tests passing.
 - Step 2: embeddings.py with load_embedding_model (lazy import, CPU, lru_cache per
   (name, local_files_only)), count_tokens, embed_chunks (normalized float32, token
   guard with WARNING + over_limit_chunk_ids) and embed_query; Settings
@@ -98,7 +98,41 @@
   loads from cache with no network attempt; flag off retries the Hub and stalls
   110 s before falling back to the cache; uncached model with flag on ->
   EmbeddingError.
+
+## 2026-11-20 — Phase 4
 - Step 2b: numpy>=2,<3 declared (imported directly; reinstall changed no packages);
   local .env with one override (RAG_EMBEDDING_LOCAL_FILES_ONLY=true); docs updated,
-  committed and pushed.
+  committed f77f604 and pushed.
 - Phase 4 complete. 356 tests passing.
+
+## 2026-11-20 — Phase 5
+- Step 1a: installed chromadb 1.5.9 (Requires-Python >=3.9), pinned >=1.5,<2. Dry-run
+  and install: 50 new packages (incl. grpcio, kubernetes, opentelemetry-*, uvicorn,
+  httpx, aiohttp), no upgrades or downgrades; pip check clean; editable reinstall
+  changed no packages. site-packages 1,205.9 MB -> 1,426.8 MB (+221.0 MB). No SSL
+  problems.
+- Spike scripts/chroma_spike.py (temp dir, fake 384-dim vectors, no model):
+  cosine via configuration={"hnsw": {"space": "cosine"}} read back as "cosine";
+  legacy metadata {"hnsw:space": "cosine"} also works without a warning but leaves
+  the key in collection metadata. Collection metadata embedding_model/embedding_dim
+  persists. embedding_function=None: query_texts raises ValueError, ~/.cache/chroma
+  never created. Chroma distance = 1 - dot for normalized vectors (max diff 6e-08).
+  Orphans: upsert of 3 over 5 leaves 2; delete(where doc_id) + add leaves exactly 3,
+  other doc untouched. Persistence verified in-process (after clear_system_cache)
+  and in a fresh process. get_max_batch_size() = 5461. RSS 34.3 MB -> 71.0 MB after
+  import (0.93 s) -> 91.5 MB after the spike.
+- Found: rmtree of the store in the same process raises PermissionError (WinError 32,
+  HNSW data_level0.bin locked) even after dropping the client and
+  clear_system_cache(); deletion works after the process exits.
+- Found: reading collection.configuration with no embedding function emits
+  DeprecationWarning "legacy embedding function config".
+- 356 tests passing.
+- Step 1a-fix: spike check k reclassified as KNOWN_LIMITATION (excluded from the
+  failure count); spike now exits 0 with all other checks VERIFIED. The lock was seen
+  on data_level0.bin in one run and on chroma.sqlite3 in another, so the whole store
+  folder is locked by the opening process. Repo docs/ had diverged from the
+  claude.ai project copies (commit hashes, Step 2b date note, .env facts, Risks)
+  because end-of-session doc updates were applied to the project but not to the
+  repo; merged section by section, Step 1a facts kept. 356 tests passing.
+- Lesson: End-of-session doc updates must be applied to BOTH the repo docs/ and the
+  claude.ai project files.

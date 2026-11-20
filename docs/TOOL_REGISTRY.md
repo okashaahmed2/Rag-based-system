@@ -17,7 +17,7 @@
 | PyTorch | CPU build, pulled by sentence-transformers | Phase 4 | Indirect | Installed | 2.15.0+cpu |
 | transformers | Tokenizer/model code | Phase 4 | Indirect | Installed | 5.23.0 |
 | huggingface-hub | Model download/cache | Phase 4 | Indirect | Installed | 2.4.0 |
-| ChromaDB | Vector store | Phase 5 | Yes | Not installed | - |
+| ChromaDB | Vector store | Phase 5 | Yes | Installed | 1.5.9 (pinned >=1.5,<2) |
 | SQLite | Status tracking (stdlib) | Phase 5 | Yes | Built in | - |
 | Ollama | Local LLM | Phase 7 | Yes | Not installed | - |
 | FastAPI + Uvicorn | API backend | Phase 8 | Yes | Not installed | - |

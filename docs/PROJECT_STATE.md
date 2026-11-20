@@ -10,8 +10,9 @@
 - Phase 3 (cleaning, header/footer removal, chunking, metadata): COMPLETE
 - Phase 4 Step 1 (Sentence Transformers install, real token measurement, chunk_size 600): COMPLETE
 - Phase 4 Step 2 (embeddings module): COMPLETE
-- Phase 4 (embeddings): COMPLETE
-- Next: Phase 5, Step 1 — ChromaDB + SQLite (start in a NEW session)
+- Phase 4 (embeddings): COMPLETE (commit f77f604)
+- Phase 5 Step 1a (ChromaDB install + spike): COMPLETE (pending commit)
+- Next: Phase 5 Step 1b — vector_store.py
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -75,6 +76,26 @@
 - local_files_only=True loads from cache with network blocked; flag off with network
   blocked stalled 110 s before cache fallback; uncached model with flag on ->
   EmbeddingError
+- Local .env with one line RAG_EMBEDDING_LOCAL_FILES_ONLY=true, git-ignored;
+  Settings read True and keep chunk_size 600 from the code default
+- chromadb 1.5.9 installed (50 new packages, no upgrades/downgrades, pip check clean,
+  +221.0 MB site-packages); pinned >=1.5,<2; editable reinstall changed nothing
+- Chroma spike (scripts/chroma_spike.py, temp dir, fake normalized 384-dim vectors):
+  PersistentClient with anonymized_telemetry=False; cosine set via
+  configuration={"hnsw": {"space": "cosine"}} and read back as "cosine";
+  collection metadata embedding_model/embedding_dim read back after reopen;
+  embedding_function=None -> query_texts raises ValueError, ~/.cache/chroma not
+  created; add() with ids/embeddings/documents/flat metadata round-trips;
+  query_embeddings distance == 1 - dot (max diff 6e-08); upsert-only leaves 2
+  orphans, delete(where doc_id) + add leaves exactly 3, other doc untouched;
+  count/metadata/cosine persist after reopen (same process after
+  clear_system_cache, and fresh process); get_max_batch_size() = 5461
+- RSS: 34.3 MB before import, 71.0 MB after import chromadb (0.93 s), 91.5 MB after
+  the spike
+- Store folder cannot be deleted by the process that opened it (PermissionError,
+  WinError 32 on HNSW data_level0.bin, and on chroma.sqlite3 in a second run, even
+  after clear_system_cache); deletable
+  after process exit
 - 356 pytest tests passing
 
 ## Not yet verified / incomplete
@@ -91,6 +112,9 @@
 - mypy / Protocol conformance of the real SentenceTransformer
 - Embedding memory use and batch sizes other than 32
 - local_files_only on a machine with no cache (only an uncached model name tested)
+- Real model load through Settings with the new .env (flag proven at function level)
+- Chroma with real embeddings (spike used fake normalized vectors)
+- Chroma batches larger than get_max_batch_size() = 5461
 - A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
@@ -113,7 +137,10 @@
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
   test_embeddings.py
 - .env.example: settings template
+- .env (local, git-ignored): only overrides (RAG_EMBEDDING_LOCAL_FILES_ONLY=true)
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
+- scripts/chroma_spike.py: Chroma API verification spike (temp dir, fake
+  vectors; rerun after chromadb upgrades; k = known Windows lock limitation)
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -180,7 +207,7 @@ sentence-transformers install) | pydantic-settings 2.16.2 |
 pydantic 2.14.3 | pytest 9.2.0 | pymupdf 2.1 | numpy 2.4.6 (declared dependency
 since Phase 4 Step 2b) | onnxruntime 1.31.1 |
 sentence-transformers 6.3.0 | torch 2.15.0+cpu | transformers 5.23.0 |
-tokenizers 0.23.3 | huggingface-hub 2.4.0 |
+tokenizers 0.23.3 | huggingface-hub 2.4.0 | chromadb 1.5.9 |
 git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2
 
 ## Hardware (verified)
@@ -193,16 +220,27 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - Free RAM 6.6 GB at check time; review before choosing the Ollama model (Phase 7)
 - Test PDFs in data/inbox are git-ignored (local only)
 - Line endings: git LF->CRLF warnings on Windows; add .gitattributes in Phase 14.
-- Only 15-token margin at 600 (max 241) -> token guard needed in Phase 4 Step 2
-- HF Hub contacted on every model load unless HF_HUB_OFFLINE=1 (decide in Step 2)
+- Only 15-token margin at 600 (max 241) -> token guard needed in Phase 4 Step 2 (done)
 - HF symlink warning on Windows (degraded cache, harmless)
 - get_sentence_embedding_dimension renamed to get_embedding_dimension
   (old name gives a FutureWarning)
 - A wrong model_name passed to embed_chunks would mislabel the collection -> Phase 5
   must load the model and pass settings.embedding_model_name in one place
 - With local_files_only=false and no network, a model load can stall ~2 min
+- Windows: the Chroma store folder stays locked by the process that opened it (seen on
+  data_level0.bin and chroma.sqlite3, even after clear_system_cache) -> no rmtree of
+  the store in tests
+- DeprecationWarning "legacy embedding function config" whenever
+  collection.configuration is read on a collection without an embedding function
+- Chroma caches the system per path in-process (SharedSystemClient), so a
+  same-process reopen is not a persistence proof (clear the cache or use a fresh
+  process)
+- Chroma attaches its downloading DefaultEmbeddingFunction unless
+  embedding_function=None is passed on EVERY create/get of a collection
+- chromadb adds 50 transitive packages (+221 MB, incl. kubernetes, grpcio,
+  uvicorn 0.54.0); Phase 8 must still declare uvicorn/fastapi explicitly
 
 ## Next precise task
-Phase 5, Step 1: install ChromaDB, persistent collection with cosine distance and
-embedding model name in collection metadata; SQLite documents table; delete-by-doc_id
-then insert for re-ingestion; tests.
+Phase 5 Step 1b — src/rag_pipeline/vector_store.py (open/create collection with cosine
++ model metadata check, replace_document_chunks = delete by doc_id then insert, query
+by embedding) with tests.
