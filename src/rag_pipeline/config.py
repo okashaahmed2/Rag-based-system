@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     chunk_size: int = 600
     #: Maximum overlap between consecutive chunks of a page, in characters.
     chunk_overlap: int = 120
+    #: Sentence Transformers model used for both ingestion and query.
+    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    #: Number of chunks encoded per batch.
+    embedding_batch_size: int = 32
+    #: True = load the model from the local Hugging Face cache only (no Hub calls).
+    embedding_local_files_only: bool = False
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -60,6 +66,14 @@ class Settings(BaseSettings):
         """Accept log levels case-insensitively and store them upper-case."""
         if isinstance(value, str):
             return value.strip().upper()
+        return value
+
+    @field_validator("embedding_batch_size")
+    @classmethod
+    def _check_embedding_batch_size(cls, value: int) -> int:
+        """Require ``embedding_batch_size >= 1``."""
+        if value < 1:
+            raise ValueError(f"RAG_EMBEDDING_BATCH_SIZE must be >= 1, got {value}")
         return value
 
     @model_validator(mode="after")

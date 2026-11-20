@@ -89,6 +89,11 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - The same model is used for ingestion and query.
 - Re-ingestion deletes all old chunks by doc_id before inserting, because
   chunk_index (and so chunk_id) points to different text when chunk settings change.
+- Vectors are L2-normalized for both chunks and queries (dot product = cosine).
+- The model is loaded once per process (cached per model name and local_files_only).
+- Runtime uses local_files_only=true (set in the local .env), so ingestion never
+  waits on the Hugging Face Hub.
+- Chunks over the token limit are still embedded and logged as warnings.
 
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

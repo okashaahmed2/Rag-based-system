@@ -9,7 +9,9 @@
 - Phase 3 Step 4 (chunk metadata + prepare_document): COMPLETE
 - Phase 3 (cleaning, header/footer removal, chunking, metadata): COMPLETE
 - Phase 4 Step 1 (Sentence Transformers install, real token measurement, chunk_size 600): COMPLETE
-- Next: Phase 4, Step 2 — embeddings module
+- Phase 4 Step 2 (embeddings module): COMPLETE
+- Phase 4 (embeddings): COMPLETE
+- Next: Phase 5, Step 1 — ChromaDB + SQLite (start in a NEW session)
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -61,7 +63,19 @@
 - Token report at 800/120: 110 chunks, max 298, 2 over 256, 51 over 128
 - Token report at 600/120: 129 chunks, median 116, p95 177, max 241, 0 over 256,
   48 over 128
-- 329 pytest tests passing
+- embeddings.py: load_embedding_model (lazy import, CPU, lru_cache per
+  (name, local_files_only), errors -> EmbeddingError), count_tokens, embed_chunks
+  (normalized float32 (n, 384), order kept, over-limit WARNING + over_limit_chunk_ids,
+  empty input skips encode), embed_query (same model + normalization)
+- Importing rag_pipeline.embeddings loads neither sentence_transformers nor torch
+  (subprocess test)
+- Real smoke check: 129 chunks -> (129, 384), norms 1.000000, 0 over limit,
+  embed 5.11 s; sanity query "What is a decision tree?" -> top-1 Lecture07 page 4
+  (0.838), next 0.580
+- local_files_only=True loads from cache with network blocked; flag off with network
+  blocked stalled 110 s before cache fallback; uncached model with flag on ->
+  EmbeddingError
+- 356 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -73,6 +87,10 @@
 - Retrieval quality at 600 vs 800 (Phase 6 golden set)
 - Denser PDFs may exceed 256 tokens at 600 chars (worst ~2.4 chars/token seen)
 - HF model download on a fresh machine / behind a proxy
+- Over-limit WARNING on real data (stub only; no real chunk > 256)
+- mypy / Protocol conformance of the real SentenceTransformer
+- Embedding memory use and batch sizes other than 32
+- local_files_only on a machine with no cache (only an uncached model name tested)
 - A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
@@ -87,8 +105,13 @@
 - src/rag_pipeline/chunking.py: chunk_pages, TextChunk
 - src/rag_pipeline/config.py also holds chunk_size / chunk_overlap (MIN_CHUNK_SIZE = 100)
 - src/rag_pipeline/preparation.py: prepare_document, PreparedDocument, DocumentChunk
+- src/rag_pipeline/embeddings.py: load_embedding_model, count_tokens, embed_chunks,
+  embed_query, ChunkEmbeddings, EmbeddingModel, EmbeddingError
+- src/rag_pipeline/config.py also holds embedding_model_name, embedding_batch_size,
+  embedding_local_files_only
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
-  test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py
+  test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
+  test_embeddings.py
 - .env.example: settings template
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
 
@@ -132,6 +155,18 @@
 - Changing chunk settings changes what each chunk_id points to -> re-ingest must
   delete old chunks by doc_id before inserting (no orphan chunks)
 - sentence-transformers pinned >=6.3,<7
+- Embedding model passed in as a parameter (dependency injection, stub in tests)
+- Lazy import of sentence_transformers keeps tests fast and download-free
+- normalize_embeddings=True for both chunks and queries (scores comparable,
+  threshold-ready for Phase 7)
+- local_files_only passed to the SentenceTransformer constructor (not HF_HUB_OFFLINE,
+  so it affects only this load); code default False (fresh machines can download),
+  local .env sets true
+- .env holds only overrides, never a copy of .env.example
+- Over-limit chunks are embedded and warned, not split
+- embed_chunks takes model_name from the caller because a loaded model does not keep
+  its name
+- numpy declared as a dependency because it is imported directly
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -142,7 +177,8 @@
 ## Verified versions
 Python 3.11.9 | pip 26.3 | setuptools 84.2.1 (upgraded from 65.5.0 by the
 sentence-transformers install) | pydantic-settings 2.16.2 |
-pydantic 2.14.3 | pytest 9.2.0 | pymupdf 2.1 | numpy 2.4.6 | onnxruntime 1.31.1 |
+pydantic 2.14.3 | pytest 9.2.0 | pymupdf 2.1 | numpy 2.4.6 (declared dependency
+since Phase 4 Step 2b) | onnxruntime 1.31.1 |
 sentence-transformers 6.3.0 | torch 2.15.0+cpu | transformers 5.23.0 |
 tokenizers 0.23.3 | huggingface-hub 2.4.0 |
 git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2
@@ -162,9 +198,11 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - HF symlink warning on Windows (degraded cache, harmless)
 - get_sentence_embedding_dimension renamed to get_embedding_dimension
   (old name gives a FutureWarning)
+- A wrong model_name passed to embed_chunks would mislabel the collection -> Phase 5
+  must load the model and pass settings.embedding_model_name in one place
+- With local_files_only=false and no network, a model load can stall ~2 min
 
 ## Next precise task
-Phase 4, Step 2: src/rag_pipeline/embeddings.py — embedding model name in Settings,
-load the model once, embed_chunks() returning 384-dim vectors, token-count guard that
-logs a warning for chunks over max_seq_length, unit tests with a stub model (no
-download in tests); no vector storage yet.
+Phase 5, Step 1: install ChromaDB, persistent collection with cosine distance and
+embedding model name in collection metadata; SQLite documents table; delete-by-doc_id
+then insert for re-ingestion; tests.

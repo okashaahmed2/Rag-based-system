@@ -87,3 +87,18 @@
   most chunks over 128 stay over it (51 -> 48).
 - Step 1c: pinned sentence-transformers>=6.3,<7 (reinstall changed no packages),
   docs updated, committed and pushed. 329 tests passing.
+- Step 2: embeddings.py with load_embedding_model (lazy import, CPU, lru_cache per
+  (name, local_files_only)), count_tokens, embed_chunks (normalized float32, token
+  guard with WARNING + over_limit_chunk_ids) and embed_query; Settings
+  embedding_model_name / embedding_batch_size (>= 1) / embedding_local_files_only.
+  27 new tests with a stub model and a fake sentence_transformers module (no
+  download). Real smoke check: 129 chunks -> (129, 384), norms 1.000000, 0 over the
+  limit, embed 5.11 s; sanity query "What is a decision tree?" -> top-1 Lecture07
+  page 4 (0.838), next 0.580. local_files_only check with a dead proxy: flag on
+  loads from cache with no network attempt; flag off retries the Hub and stalls
+  110 s before falling back to the cache; uncached model with flag on ->
+  EmbeddingError.
+- Step 2b: numpy>=2,<3 declared (imported directly; reinstall changed no packages);
+  local .env with one override (RAG_EMBEDDING_LOCAL_FILES_ONLY=true); docs updated,
+  committed and pushed.
+- Phase 4 complete. 356 tests passing.
