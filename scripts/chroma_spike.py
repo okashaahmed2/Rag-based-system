@@ -272,6 +272,46 @@ def main() -> int:
             "upsert-only leaves 2 orphans; delete(where)+add leaves exactly 3; doc B untouched (2)",
         )
 
+        # l. add() with an id that already exists
+        existing_id = f"{doc_a}:0"
+        before = collection.get(ids=[existing_id], include=["documents", "metadatas", "embeddings"])
+        count_before = collection.count()
+        new_vector = fake_vectors(rng, 1)
+        with warnings.catch_warnings(record=True) as add_warns:
+            warnings.simplefilter("always")
+            try:
+                collection.add(
+                    ids=[existing_id],
+                    embeddings=new_vector,
+                    documents=["REPLACED text"],
+                    metadatas=[{**rec_a3["metadatas"][0], "filename": "replaced.pdf"}],
+                )
+                add_error = None
+            except Exception as exc:  # noqa: BLE001 - we only report the type
+                add_error = f"{type(exc).__name__}: {exc}"
+        after = collection.get(ids=[existing_id], include=["documents", "metadatas", "embeddings"])
+        unchanged = (
+            after["documents"] == before["documents"]
+            and after["metadatas"] == before["metadatas"]
+            and np.allclose(after["embeddings"][0], before["embeddings"][0])
+        )
+        if add_error is not None:
+            behaviour = f"raises {add_error}"
+        elif add_warns:
+            behaviour = f"warns {[str(w.message) for w in add_warns]}"
+        elif unchanged:
+            behaviour = "silently ignored (no exception, no warning, old record kept)"
+        else:
+            behaviour = "silently updated"
+        record(
+            "l",
+            add_error is None and not add_warns and unchanged and collection.count() == count_before,
+            f"add() with existing id: {behaviour}; document {before['documents']} -> "
+            f"{after['documents']}, filename {before['metadatas'][0]['filename']!r} -> "
+            f"{after['metadatas'][0]['filename']!r}, count {count_before} -> "
+            f"{collection.count()} (so replace must delete + upsert, never add)",
+        )
+
         # i. max batch size
         max_batch = client.get_max_batch_size()
         record("i", isinstance(max_batch, int) and max_batch > 0, f"client.get_max_batch_size()={max_batch}")

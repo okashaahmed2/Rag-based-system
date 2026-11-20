@@ -97,5 +97,19 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   waits on the Hugging Face Hub.
 - Chunks over the token limit are still embedded and logged as warnings.
 
+## Vector store (Phase 5)
+- One persistent Chroma collection (RAG_CHROMA_PATH, RAG_CHROMA_COLLECTION_NAME),
+  cosine distance, no Chroma embedding function (vectors always come from
+  embeddings.py; queries use query_embeddings only); telemetry off.
+- Collection metadata stores embedding_model and embedding_dim at creation; every
+  open checks them and the distance space and refuses a mismatch (never overwrites).
+- One record per chunk: id = chunk_id, embedding, document = chunk text, metadata =
+  DocumentChunk.to_metadata().
+- Re-ingestion: validate everything, then delete(where doc_id) and upsert in batches
+  (Chroma add() silently ignores existing ids). Delete and upsert are not atomic;
+  a failure in between is reported and fixed by re-running the replace.
+- Query results carry filename, page_number, chunk_index, text, distance and
+  similarity = 1 - distance, nearest first.
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

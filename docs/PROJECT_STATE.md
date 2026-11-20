@@ -11,8 +11,9 @@
 - Phase 4 Step 1 (Sentence Transformers install, real token measurement, chunk_size 600): COMPLETE
 - Phase 4 Step 2 (embeddings module): COMPLETE
 - Phase 4 (embeddings): COMPLETE (commit f77f604)
-- Phase 5 Step 1a (ChromaDB install + spike): COMPLETE (pending commit)
-- Next: Phase 5 Step 1b — vector_store.py
+- Phase 5 Step 1a (ChromaDB install + spike): COMPLETE (commit 07f9e3b)
+- Phase 5 Step 1b (vector_store.py + tests + real smoke check): COMPLETE
+- Next: Phase 5 Step 1c — SQLite document/job status
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -96,7 +97,33 @@
   WinError 32 on HNSW data_level0.bin, and on chroma.sqlite3 in a second run, even
   after clear_system_cache); deletable
   after process exit
-- 356 pytest tests passing
+- Chroma add() with an existing id is silently ignored (no exception, no warning,
+  old record kept) — spike check l
+- Chroma 1.5.9 probes: missing collection -> NotFoundError; top_k > count returns all
+  without warning; empty collection query -> no results; wrong dimension ->
+  InvalidArgumentError; collection names need 3-512 chars [a-zA-Z0-9._-]
+- vector_store.py (tests, real Chroma in tmp_path, fake vectors): new collection saves
+  model/dim metadata + cosine; reopen with same settings keeps data (also in a fresh
+  subprocess); different model or dim -> VectorStoreError and saved metadata
+  unchanged; missing metadata or l2 space -> VectorStoreError; replace 5 then 3 ->
+  exactly ids :0..:2 with new texts, other doc untouched; 0 chunks -> doc emptied;
+  replace twice -> identical content; 9 invalid inputs -> VectorStoreError with no
+  delete/upsert call and store unchanged; max_batch_size=2 -> upserts of [2, 2, 1];
+  batch capped by client limit; metadata round-trip == to_metadata(); query sorted
+  by distance, similarity == 1 - distance == dot (1e-5), int page/chunk_index,
+  top_k > count returns all, empty -> [], wrong shape / bad top_k / inf ->
+  VectorStoreError; no chunk text in logs
+- Settings RAG_CHROMA_PATH (default data/chroma, resolved under project root) and
+  RAG_CHROMA_COLLECTION_NAME (default chunks, stripped, non-empty); data/chroma
+  covered by the existing .gitignore rule data/chroma/
+- Real smoke check (scripts/vector_store_smoke.py, temp store, real model with
+  local_files_only from .env): 129 chunks submitted incl. the renamed copy, 86
+  stored (copy adds none: same doc_id and ids); research paper 24, Lecture07 17,
+  partly blank 2, scanned needs_ocr 0, SVM 43 (+ copy 43); invalid and password PDFs
+  skipped with PdfExtractionError; "What is a decision tree?" -> top-1 Lecture07
+  page 4, similarity 0.838088 (Phase 4: 0.838), then pages 5/3/2/14 at 0.580-0.560;
+  re-run replace of SVM: 43 -> 43, total 86 -> 86
+- 406 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -113,8 +140,10 @@
 - Embedding memory use and batch sizes other than 32
 - local_files_only on a machine with no cache (only an uncached model name tested)
 - Real model load through Settings with the new .env (flag proven at function level)
-- Chroma with real embeddings (spike used fake normalized vectors)
-- Chroma batches larger than get_max_batch_size() = 5461
+- Chroma batches larger than get_max_batch_size() = 5461 (batching logic tested with
+  small limits only)
+- A real Chroma failure between delete and upsert (no fault injection yet)
+- Concurrent writers to the same store (single process assumed)
 - A possible figure/table area on research paper page 3 (line-level column switches)
 
 ## Files and responsibilities
@@ -132,15 +161,19 @@
 - src/rag_pipeline/embeddings.py: load_embedding_model, count_tokens, embed_chunks,
   embed_query, ChunkEmbeddings, EmbeddingModel, EmbeddingError
 - src/rag_pipeline/config.py also holds embedding_model_name, embedding_batch_size,
-  embedding_local_files_only
+  embedding_local_files_only, chroma_path, chroma_collection_name
+- src/rag_pipeline/vector_store.py: open_collection, replace_document_chunks,
+  count_document_chunks, query_by_embedding, RetrievedChunk, VectorStoreError
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
-  test_embeddings.py
+  test_embeddings.py, test_vector_store.py
 - .env.example: settings template
 - .env (local, git-ignored): only overrides (RAG_EMBEDDING_LOCAL_FILES_ONLY=true)
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
 - scripts/chroma_spike.py: Chroma API verification spike (temp dir, fake
   vectors; rerun after chromadb upgrades; k = known Windows lock limitation)
+- scripts/vector_store_smoke.py: real end-to-end store/query check on the inbox PDFs
+  (temp store, never data/chroma)
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -194,6 +227,16 @@
 - embed_chunks takes model_name from the caller because a loaded model does not keep
   its name
 - numpy declared as a dependency because it is imported directly
+- open_collection uses get_collection first and create_collection only on
+  NotFoundError (no get_or_create_collection with metadata, which could hide a model
+  mismatch); a mismatch raises, saved metadata is never overwritten
+- replace_document_chunks validates everything before delete, then deletes by doc_id
+  and upserts (add() would silently ignore existing ids)
+- embeddings=None allowed only for zero chunks (needs_ocr documents need no model)
+- Batch size = min(max_batch_size, client limit); client limit read from
+  collection._client (private Chroma attribute, covered by tests)
+- The legacy-embedding-function DeprecationWarning is suppressed only locally around
+  the one configuration read in open_collection
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -239,8 +282,13 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   embedding_function=None is passed on EVERY create/get of a collection
 - chromadb adds 50 transitive packages (+221 MB, incl. kubernetes, grpcio,
   uvicorn 0.54.0); Phase 8 must still declare uvicorn/fastapi explicitly
+- Delete and upsert in replace_document_chunks are not atomic: a crash in between
+  leaves a document with no or partial chunks -> SQLite status must stay
+  processing/failed until the replace returns, and a re-run fixes it
+- vector_store reads the batch limit through the private collection._client; a
+  chromadb upgrade may break it (test_batch_size_is_capped_by_client_limit catches it)
 
 ## Next precise task
-Phase 5 Step 1b — src/rag_pipeline/vector_store.py (open/create collection with cosine
-+ model metadata check, replace_document_chunks = delete by doc_id then insert, query
-by embedding) with tests.
+Phase 5 Step 1c — SQLite document/job status store (documents table with doc_id,
+filename, status pending/processing/done/failed/needs_ocr, error_message, attempts,
+timestamps) with tests; no ingestion orchestration yet.

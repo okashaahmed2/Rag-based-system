@@ -179,6 +179,41 @@ def test_non_integer_chunk_size_raises(
         Settings(_env_file=None)
 
 
+def test_chroma_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.chroma_path == PROJECT_ROOT / "data" / "chroma"
+    assert settings.chroma_collection_name == "chunks"
+
+
+def test_chroma_settings_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_CHROMA_PATH", str(tmp_path / "store"))
+    monkeypatch.setenv("RAG_CHROMA_COLLECTION_NAME", "  my_chunks  ")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.chroma_path == tmp_path / "store"
+    assert settings.chroma_collection_name == "my_chunks"
+
+
+def test_relative_chroma_path_resolves_under_project_root(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, project_root=tmp_path, chroma_path=Path("vs"))
+
+    assert settings.chroma_path == tmp_path / "vs"
+
+
+@pytest.mark.parametrize("bad_name", ["", "   "])
+def test_empty_chroma_collection_name_raises(
+    bad_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_CHROMA_COLLECTION_NAME", bad_name)
+
+    with pytest.raises(ValidationError, match="RAG_CHROMA_COLLECTION_NAME must not be empty"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     first = get_settings()
 

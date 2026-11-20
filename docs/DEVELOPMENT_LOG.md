@@ -110,7 +110,7 @@
   and install: 50 new packages (incl. grpcio, kubernetes, opentelemetry-*, uvicorn,
   httpx, aiohttp), no upgrades or downgrades; pip check clean; editable reinstall
   changed no packages. site-packages 1,205.9 MB -> 1,426.8 MB (+221.0 MB). No SSL
-  problems.
+  problems. Commit 07f9e3b, pushed.
 - Spike scripts/chroma_spike.py (temp dir, fake 384-dim vectors, no model):
   cosine via configuration={"hnsw": {"space": "cosine"}} read back as "cosine";
   legacy metadata {"hnsw:space": "cosine"} also works without a warning but leaves
@@ -136,3 +136,24 @@
   repo; merged section by section, Step 1a facts kept. 356 tests passing.
 - Lesson: End-of-session doc updates must be applied to BOTH the repo docs/ and the
   claude.ai project files.
+- Step 1b: vector_store.py with open_collection (get first, create only if missing,
+  cosine + embedding_model/embedding_dim metadata, saved model/dim/space checked on
+  every open), replace_document_chunks (all validation before delete, then
+  delete(where doc_id) + batched upsert), count_document_chunks, query_by_embedding
+  (query_embeddings only, RetrievedChunk with similarity = 1 - distance). Settings
+  RAG_CHROMA_PATH (data/chroma, git-ignored by the existing data/chroma/ rule) and
+  RAG_CHROMA_COLLECTION_NAME (chunks, non-empty). 45 vector store + 5 config tests
+  (real Chroma in tmp_path, fake vectors, fresh-subprocess persistence). 406 tests
+  passing.
+- Probed Chroma 1.5.9: missing collection -> NotFoundError; top_k > count returns all
+  without warning; empty collection -> [[]]; wrong dimension -> InvalidArgumentError;
+  n_results=0 -> TypeError; collection names need 3-512 chars [a-zA-Z0-9._-].
+- Spike check l: add() with an existing id is silently ignored (no exception, no
+  warning, old record kept, count unchanged) -> replace must use upsert after delete.
+- Real smoke check (scripts/vector_store_smoke.py, temp store): 129 chunks submitted
+  (incl. the renamed SVM copy), 86 stored (copy has the same doc_id/ids and adds
+  none), needs_ocr doc 0 chunks, invalid and password PDFs skipped with
+  PdfExtractionError. "What is a decision tree?" -> top-1 Lecture07 page 4,
+  similarity 0.838088 (same as Phase 4). Re-run replace: 43 -> 43, total 86 -> 86.
+- Found: the smoke check's first expectation (collection count 129) was wrong: 129
+  counts the duplicate copy; the store correctly holds 86.

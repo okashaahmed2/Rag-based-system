@@ -23,7 +23,13 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-_PATH_FIELDS: tuple[str, ...] = ("inbox_dir", "processed_dir", "failed_dir", "log_dir")
+_PATH_FIELDS: tuple[str, ...] = (
+    "inbox_dir",
+    "processed_dir",
+    "failed_dir",
+    "log_dir",
+    "chroma_path",
+)
 
 #: Smallest allowed ``chunk_size`` setting, in characters.
 MIN_CHUNK_SIZE = 100
@@ -59,6 +65,10 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 32
     #: True = load the model from the local Hugging Face cache only (no Hub calls).
     embedding_local_files_only: bool = False
+    #: Folder of the persistent ChromaDB vector store.
+    chroma_path: Path = Path("data/chroma")
+    #: Name of the ChromaDB collection holding the document chunks.
+    chroma_collection_name: str = "chunks"
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -75,6 +85,15 @@ class Settings(BaseSettings):
         if value < 1:
             raise ValueError(f"RAG_EMBEDDING_BATCH_SIZE must be >= 1, got {value}")
         return value
+
+    @field_validator("chroma_collection_name")
+    @classmethod
+    def _check_chroma_collection_name(cls, value: str) -> str:
+        """Require a non-empty collection name (surrounding whitespace removed)."""
+        name = value.strip()
+        if not name:
+            raise ValueError("RAG_CHROMA_COLLECTION_NAME must not be empty")
+        return name
 
     @model_validator(mode="after")
     def _check_chunk_sizes(self) -> Settings:
