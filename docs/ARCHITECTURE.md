@@ -114,5 +114,15 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - Query results carry filename, page_number, chunk_index, text, distance and
   similarity = 1 - distance, nearest first.
 
+## Ingestion orchestration (Phase 5)
+- build_ingest_context(settings) wires status store (initialize + recover
+  interrupted), embedding model and collection once per process.
+- ingest_document(path, context): hash -> register -> skip if done / needs_ocr /
+  processing / attempts exhausted -> processing -> prepare -> needs_ocr (clear chunks)
+  or embed -> replace chunks -> done. Chroma is written before the status says done.
+- Ordinary errors -> failed with "ExceptionType: message", returned as a result;
+  status store errors are re-raised; interrupts leave processing for startup
+  recovery. No file moves here (Step 3).
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

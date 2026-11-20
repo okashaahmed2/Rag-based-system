@@ -13,8 +13,10 @@
 - Phase 4 (embeddings): COMPLETE (commit f77f604)
 - Phase 5 Step 1a (ChromaDB install + spike): COMPLETE (commit 07f9e3b)
 - Phase 5 Step 1b (vector_store.py + tests + real smoke check): COMPLETE (commit 2116068)
-- Phase 5 Step 1c (SQLite document status store + tests): COMPLETE
-- Next: Phase 5 Step 2 — ingestion orchestration for one document
+- Phase 5 Step 1c (SQLite document status store + tests): COMPLETE (commit 18102d7)
+- Phase 5 Step 2 (ingestion orchestration for one document + tests + smoke check):
+  COMPLETE
+- Next: Phase 5 Step 3 — ingest_inbox with scan_inbox and file moves
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -145,7 +147,40 @@
   ignored by the existing .gitignore rule *.db) and RAG_MAX_INGEST_ATTEMPTS
   (default 3, >= 1)
 - SQLite library 3.45.1 (Python 3.11.9 stdlib sqlite3)
-- 474 pytest tests passing
+- prepare_document can return 0 chunks with needs_ocr False: a PDF whose pages hold
+  only "Page N of 3" footers or one repeated header (3 pages) has text but all of it
+  is removed by header/footer removal -> ingestion marks it failed "no chunks
+  produced" (test_text_without_chunks_fails)
+- ingestion.py (31 tests, tmp_path SQLite + Chroma, stub model, real PyMuPDF PDFs):
+  happy path DONE with chunk_count == Chroma count == SQLite chunk_count, attempts 1;
+  needs_ocr -> NEEDS_OCR, 0 chunks, 3 stale chunks cleared; invalid and password
+  PDFs -> FAILED "PdfExtractionError", attempts 1, no chunks; done / needs_ocr docs
+  and a renamed copy -> SKIPPED "already ingested" with prepare/embed/replace never
+  called; processing -> SKIPPED "in progress"; retry after failure -> DONE attempts 2,
+  error cleared; 3 failures -> SKIPPED "attempts exhausted", no work; injected
+  Chroma upsert failure after delete (simulated fault: patched Collection.upsert
+  raising InternalError) -> FAILED (VectorStoreError), doc has 0 chunks,
+  normal retry -> DONE with exact ids :0..:n-1 (no orphans from n+4 stale chunks),
+  other doc untouched; KeyboardInterrupt in replace propagates, status stays
+  processing, recover_interrupted -> failed, next ingest DONE attempts 2; embedding
+  failure -> FAILED and existing chunks unchanged; doc_id mismatch -> FAILED "file
+  changed during processing"; missing file -> FAILED, doc_id None, nothing
+  registered; StatusStoreError from register/mark_processing/mark_done/mark_failed
+  re-raised with a CRITICAL log; no chunk text in logs; no file moved or changed;
+  build_ingest_context runs recovery, uses the model's dimension (12) and the
+  settings model name, rejects a collection saved with another model, reports model
+  and status store failures as IngestionSetupError
+- Real smoke check (scripts/ingestion_smoke.py, temp Chroma + SQLite, real model,
+  local_files_only from .env, 600/120): run 1 research paper 24, Lecture07 17,
+  partly blank 2, SVM 43 DONE; scanned NEEDS_OCR 0; svm_copy_renamed SKIPPED
+  "already ingested"; invalid and password FAILED (PdfExtractionError), attempts 1;
+  Chroma 86, SQLite 7 rows. Run 2: all SKIPPED except the 2 FAILED again with
+  attempts 2; Chroma 86, SQLite 7. Query "What is a decision tree?" -> top-1
+  Lecture07 page 4, similarity 0.838088. Inbox files unchanged (names, sizes, mtimes);
+  data/chroma and data/status.db never created
+- Expected ingest failures (invalid / password PDF, no chunks) log one ERROR line
+  without traceback; an unexpected RuntimeError logs the traceback (tests)
+- 509 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -164,7 +199,6 @@
 - Real model load through Settings with the new .env (flag proven at function level)
 - Chroma batches larger than get_max_batch_size() = 5461 (batching logic tested with
   small limits only)
-- A real Chroma failure between delete and upsert (no fault injection yet)
 - Concurrent writers to the same store (single process assumed)
 - SQLite under concurrent access (busy timeout 5 s set, never exercised)
 - Status store on the real data/status.db (tests use tmp_path only)
@@ -192,9 +226,11 @@
 - src/rag_pipeline/status_db.py: StatusStore (initialize, register_document,
   mark_processing/done/needs_ocr/failed, get_document, list_documents,
   known_doc_ids, recover_interrupted), DocumentRecord, DocumentStatus, StatusStoreError
+- src/rag_pipeline/ingestion.py: build_ingest_context, ingest_document, IngestContext,
+  IngestResult, IngestOutcome, IngestionError, IngestionSetupError
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
-  test_embeddings.py, test_vector_store.py, test_status_db.py
+  test_embeddings.py, test_vector_store.py, test_status_db.py, test_ingestion.py
 - .env.example: settings template
 - .env (local, git-ignored): only overrides (RAG_EMBEDDING_LOCAL_FILES_ONLY=true)
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
@@ -202,6 +238,8 @@
   vectors; rerun after chromadb upgrades; k = known Windows lock limitation)
 - scripts/vector_store_smoke.py: real end-to-end store/query check on the inbox PDFs
   (temp store, never data/chroma)
+- scripts/ingestion_smoke.py: real ingest_document run (twice) on the inbox PDFs plus
+  query (temp Chroma + SQLite, never data/chroma or data/status.db; no file moves)
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -282,6 +320,23 @@
   locks); non-initialize calls open the file read-write via URI so a missing database
   is an error, not a silently created empty file
 - Timestamps: UTC ISO 8601 with offset and microseconds; clock injectable for tests
+- ingest_document catches Exception, never BaseException: ordinary errors end as
+  failed; interrupts propagate and leave processing for startup recovery
+- One result per document (IngestResult), not an exception, so a caller can continue
+  with the next file; only StatusStoreError is re-raised (CRITICAL; the register is
+  broken and continuing is unsafe)
+- build_ingest_context is the only place that wires store, model and collection from
+  settings; it runs recover_interrupted once and opens the collection with the
+  loaded model's dimension and settings.embedding_model_name
+- 0 chunks without needs_ocr -> failed "no chunks produced" (not done with 0 chunks)
+- Skip before any work: done / needs_ocr ("already ingested"), processing ("in
+  progress"), failed with attempts >= max ("attempts exhausted")
+- Fixed order: Chroma replace before mark_done; a hashing failure registers nothing
+  (no doc_id exists)
+- The second hash inside prepare_document is compared with the registered doc_id
+  (file changed during processing -> failed)
+- prepare_document gets Settings.model_construct(chunk_size, chunk_overlap) (no env
+  read; values validated by IngestContext)
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -312,8 +367,6 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - HF symlink warning on Windows (degraded cache, harmless)
 - get_sentence_embedding_dimension renamed to get_embedding_dimension
   (old name gives a FutureWarning)
-- A wrong model_name passed to embed_chunks would mislabel the collection -> Phase 5
-  must load the model and pass settings.embedding_model_name in one place
 - With local_files_only=false and no network, a model load can stall ~2 min
 - Windows: the Chroma store folder stays locked by the process that opened it (seen on
   data_level0.bin and chroma.sqlite3, even after clear_system_cache) -> no rmtree of
@@ -336,8 +389,17 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   ingesting would mark that live work failed
 - A document stuck in processing is invisible to scans until the next startup
   recovery
+- A failed document may keep no or partial chunks in Chroma (upsert failure after
+  delete); queries can still return them until a retry succeeds -> consider
+  filtering query results to done doc_ids (Phase 6/7)
+- Expected failures are logged once by extraction and once by ingestion (one line,
+  no traceback)
+- ingestion passes Settings.model_construct(chunk_size, chunk_overlap) to
+  prepare_document (validation skipped; any other Settings field would silently use
+  its default) -> refactor prepare_document to take chunk values (Phase 11)
+- An IngestContext built by hand could pair a model with the wrong name (only
+  build_ingest_context guarantees they match)
 
 ## Next precise task
-Phase 5 Step 2 — ingestion orchestration for one document: register -> processing ->
-prepare_document -> embed -> replace_document_chunks -> done / needs_ocr / failed,
-with startup recovery and tests.
+Phase 5 Step 3 — ingest_inbox (decisions pending: destination folders for needs_ocr
+and duplicate copies, retryable failed files, name collisions)

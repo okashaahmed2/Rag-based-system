@@ -168,3 +168,20 @@
   474 tests passing.
 - Found: data/status.db-journal was not covered by .gitignore; added *.db-journal,
   *.db-wal, *.db-shm.
+- Step 1c committed 18102d7 and pushed. 474 tests passing.
+- Step 2: ingestion.py with build_ingest_context (only wiring place; startup recovery,
+  model dimension -> collection) and ingest_document (hash -> register -> skip check
+  -> processing -> prepare -> needs_ocr | embed -> replace -> done; Exception ->
+  failed and returned; StatusStoreError re-raised; BaseException propagates). 31
+  tests incl. fault injection (upsert failure after delete, KeyboardInterrupt).
+  505 tests passing.
+- Found: prepare_document returns 0 chunks with needs_ocr False when all text is
+  repeated headers/footers (3 pages of "Page N of 3") -> treated as failed "no chunks
+  produced".
+- Real smoke check (scripts/ingestion_smoke.py, temp stores): run 1 matches the
+  expected table (Chroma 86, SQLite 7 rows, copy SKIPPED), run 2 all SKIPPED except
+  the invalid and password PDFs FAILED with attempts 2; top-1 Lecture07 page 4
+  0.838088.
+- Log fix: expected failures (PdfExtractionError, IngestionError) now log one ERROR
+  line without traceback; other exceptions keep the traceback. 4 new tests, 509 tests
+  passing.
