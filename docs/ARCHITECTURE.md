@@ -124,5 +124,14 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   status store errors are re-raised; interrupts leave processing for startup
   recovery. No file moves here (Step 3).
 
+## Folder lifecycle (Phase 5)
+- data/inbox -> data/processed (done) | data/needs_ocr (needs_ocr) | data/failed
+  (failed after the last allowed attempt). Retryable failures, pending and
+  processing documents stay in the inbox.
+- Placement follows the document's status in SQLite, not the outcome of one run:
+  duplicate copies follow their document, and a move that failed is retried on the
+  next run without re-ingesting.
+- Files are never overwritten or deleted; name collisions get " (1)", " (2)", ...
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

@@ -15,8 +15,11 @@
 - Phase 5 Step 1b (vector_store.py + tests + real smoke check): COMPLETE (commit 2116068)
 - Phase 5 Step 1c (SQLite document status store + tests): COMPLETE (commit 18102d7)
 - Phase 5 Step 2 (ingestion orchestration for one document + tests + smoke check):
+  COMPLETE (commit df9450d)
+- Phase 5 Step 3 (ingest_inbox: scan -> ingest -> move by status + tests + smoke):
   COMPLETE
-- Next: Phase 5 Step 3 — ingest_inbox with scan_inbox and file moves
+- Phase 5 (ChromaDB + SQLite + ingestion orchestration + inbox lifecycle): COMPLETE
+- Next: Phase 5 complete -> Phase 6 Step 1: retrieval prototype + golden evaluation set
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -180,7 +183,33 @@
   data/chroma and data/status.db never created
 - Expected ingest failures (invalid / password PDF, no chunks) log one ERROR line
   without traceback; an unexpected RuntimeError logs the traceback (tests)
-- 509 pytest tests passing
+- inbox_ingestion.py (28 tests, tmp folders, tmp SQLite + Chroma, stub model):
+  destination_for matrix (done -> processed, needs_ocr -> needs_ocr, failed at/over
+  max -> failed, failed below max / pending / processing / unregistered -> None);
+  safe_move: free name, collisions -> " (1)" / " (2)" with existing files
+  byte-identical, FileExistsError race -> next name, Windows os.rename refuses to
+  overwrite (FileExistsError), PermissionError propagates with the source kept;
+  mixed inbox run 1 -> text + renamed copy in processed, scanned in needs_ocr,
+  invalid + password stay (attempts 1), Chroma holds the text doc's chunks once;
+  runs 2 and 3 -> invalid + password move to failed after attempt 3, run 4 ingests
+  nothing (spy); duplicate in the same scan ingested once, both in processed; later
+  copy of a done doc moved without ingestion; injected PermissionError on the move
+  -> file stays, status done, reported, next run moves it without re-ingestion;
+  processing record's file stays; scan ERROR file stays and is reported; collision
+  with an existing different file in processed -> "a (1).pdf", old file untouched;
+  file-content multiset across the four folders identical before/after every run;
+  empty inbox -> empty report; files moved into a subfolder of the inbox are not
+  rescanned; a destination equal to the inbox is rejected
+- Settings RAG_NEEDS_OCR_DIR (default data/needs_ocr, resolved under project root);
+  .gitignore rule data/needs_ocr/* added (it was not ignored)
+- Real smoke check (scripts/inbox_smoke.py, COPY of data/inbox in a temp dir, temp
+  folders/Chroma/SQLite, real model): run 1 processed = research paper, Lecture07,
+  partly blank, SVM, svm_copy_renamed; needs_ocr = scanned; inbox = invalid +
+  password (attempts 1); Chroma 86. Run 2: same folders, attempts 2. Run 3: invalid
+  + password in failed (attempts 3), inbox empty, Chroma 86, SQLite 7. Query top-1
+  Lecture07 page 4, 0.838088. data/inbox names, sizes and mtimes identical before
+  and after
+- 539 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -228,9 +257,13 @@
   known_doc_ids, recover_interrupted), DocumentRecord, DocumentStatus, StatusStoreError
 - src/rag_pipeline/ingestion.py: build_ingest_context, ingest_document, IngestContext,
   IngestResult, IngestOutcome, IngestionError, IngestionSetupError
+- src/rag_pipeline/inbox_ingestion.py: ingest_inbox, destination_for, safe_move,
+  DestinationFolders, InboxRunReport, FileMove, LeftInInbox, MoveFailure
+- src/rag_pipeline/config.py also holds needs_ocr_dir
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
-  test_embeddings.py, test_vector_store.py, test_status_db.py, test_ingestion.py
+  test_embeddings.py, test_vector_store.py, test_status_db.py, test_ingestion.py,
+  test_inbox_ingestion.py
 - .env.example: settings template
 - .env (local, git-ignored): only overrides (RAG_EMBEDDING_LOCAL_FILES_ONLY=true)
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
@@ -240,6 +273,8 @@
   (temp store, never data/chroma)
 - scripts/ingestion_smoke.py: real ingest_document run (twice) on the inbox PDFs plus
   query (temp Chroma + SQLite, never data/chroma or data/status.db; no file moves)
+- scripts/inbox_smoke.py: real ingest_inbox run (3 times) on a COPY of data/inbox in a
+  temp dir, plus query; proves data/inbox unchanged
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -337,6 +372,16 @@
   (file changed during processing -> failed)
 - prepare_document gets Settings.model_construct(chunk_size, chunk_overlap) (no env
   read; values validated by IngestContext)
+- File placement follows the document's status, decided only by destination_for:
+  done -> processed_dir; needs_ocr -> needs_ocr_dir; failed with attempts >= max ->
+  failed_dir; failed below max, pending, processing -> stay in the inbox
+- A duplicate copy follows its document's status (copy of a done doc -> processed)
+- Name collision -> "stem (1).pdf", "stem (2).pdf", ...; never overwrite, never delete
+  (check + rename that raises FileExistsError, next name on a race)
+- A failed move is logged WARNING, reported, and leaves the status unchanged; the
+  next run retries it (placement follows status), without re-ingestion
+- ingest_inbox: NEW files ingested first, then every file with a doc_id placed;
+  scan ERROR files stay and are reported; StatusStoreError propagates
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -400,6 +445,15 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - An IngestContext built by hand could pair a model with the wrong name (only
   build_ingest_context guarantees they match)
 
+- safe_move needs the destination on the same volume as the inbox (os.rename); a
+  cross-volume folder setting makes every move fail (reported, file stays)
+- A file that stays in the inbox after its last allowed attempt can only happen if the
+  move keeps failing; it is retried every run (WARNING each time)
+- Duplicate copies pile up in processed/ (no dedup of files, by design: never delete)
+- safe_move on non-Windows uses hard link + unlink (untested); a crash between them
+  leaves the file in both places -> next run moves the inbox copy as 'name (1).pdf'
+  (no loss, one extra copy). Test on Linux before Docker (Phase 13).
+
 ## Next precise task
-Phase 5 Step 3 — ingest_inbox (decisions pending: destination folders for needs_ocr
-and duplicate copies, retryable failed files, name collisions)
+Phase 6 Step 1 — retrieval prototype + golden evaluation set (no LLM): filter query
+results to done doc_ids; 10-15 questions with expected document/page; hit@k and MRR.

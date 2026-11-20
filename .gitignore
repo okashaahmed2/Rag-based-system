@@ -21,6 +21,8 @@ data/processed/*
 !data/processed/.gitkeep
 data/failed/*
 !data/failed/.gitkeep
+data/needs_ocr/*
+!data/needs_ocr/.gitkeep
 
 # --- Local storage: vector store and databases ---
 data/chroma/

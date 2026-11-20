@@ -251,6 +251,22 @@ def test_invalid_max_ingest_attempts_raises(
         Settings(_env_file=None)
 
 
+def test_needs_ocr_dir_default_and_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert Settings(_env_file=None).needs_ocr_dir == PROJECT_ROOT / "data" / "needs_ocr"
+
+    monkeypatch.setenv("RAG_NEEDS_OCR_DIR", str(tmp_path / "ocr"))
+
+    assert Settings(_env_file=None).needs_ocr_dir == tmp_path / "ocr"
+
+
+def test_relative_needs_ocr_dir_resolves_under_project_root(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, project_root=tmp_path, needs_ocr_dir=Path("ocr"))
+
+    assert settings.needs_ocr_dir == tmp_path / "ocr"
+
+
 def test_get_settings_is_cached() -> None:
     first = get_settings()
 

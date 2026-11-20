@@ -185,3 +185,15 @@
 - Log fix: expected failures (PdfExtractionError, IngestionError) now log one ERROR
   line without traceback; other exceptions keep the traceback. 4 new tests, 509 tests
   passing.
+- Step 2 committed df9450d and pushed.
+- Step 3: inbox_ingestion.py with destination_for (placement follows status),
+  safe_move (first free "stem (n)" name, rename that never overwrites, FileExistsError
+  race handled) and ingest_inbox (scan with known ids -> ingest NEW -> place every
+  file; move failures reported and healed on the next run). Setting RAG_NEEDS_OCR_DIR.
+  28 + 2 tests incl. conservation of file contents across the four folders.
+  539 tests passing.
+- Found: data/needs_ocr/ was not git-ignored; added data/needs_ocr/* (+ .gitkeep
+  exception, no .gitkeep created).
+- Real smoke check (scripts/inbox_smoke.py, temp copy of data/inbox): run 1 -> 5 in
+  processed, scanned in needs_ocr, invalid + password stay; run 3 -> both in failed,
+  inbox empty; Chroma 86, SQLite 7; top-1 Lecture07 p4 0.838088; data/inbox unchanged.

@@ -27,6 +27,7 @@ _PATH_FIELDS: tuple[str, ...] = (
     "inbox_dir",
     "processed_dir",
     "failed_dir",
+    "needs_ocr_dir",
     "log_dir",
     "chroma_path",
     "status_db_path",
@@ -54,6 +55,8 @@ class Settings(BaseSettings):
     inbox_dir: Path = Path("data/inbox")
     processed_dir: Path = Path("data/processed")
     failed_dir: Path = Path("data/failed")
+    #: PDFs without extractable text, waiting for OCR (Phase 13).
+    needs_ocr_dir: Path = Path("data/needs_ocr")
     log_dir: Path = Path("logs")
     log_level: LogLevel = "INFO"
     #: Maximum chunk length in characters (not tokens).
