@@ -133,5 +133,31 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   next run without re-ingesting.
 - Files are never overwritten or deleted; name collisions get " (1)", " (2)", ...
 
+## Retrieval (Phase 6)
+- retrieve(query, context, top_k) returns only chunks of documents whose SQLite
+  status is done. Failed documents may keep partial chunks in Chroma, and pending,
+  processing and needs_ocr documents are unfinished, so the doc_id filter is applied
+  inside Chroma (where doc_id $in done ids) before top_k is taken. No done document
+  -> [] without querying. A post-check rejects any non-done chunk.
+- The read path does no recovery (recover_interrupted runs at ingestion startup only)
+  and creates no stores: the status db, the Chroma folder and the collection must
+  already exist (the collection is opened with create=False). Only exception: on an
+  existing but empty Chroma folder the Chroma client writes its own chroma.sqlite3.
+- Results are nearest first (cosine distance) with filename and page_number for
+  citations. No chunk or question text is logged.
+
+## Evaluation (Phase 6)
+- Golden set: eval/golden_set.jsonl, JSON Lines, one question per line (see
+  eval/golden_set.example.jsonl, both lines fake):
+  {"id", "question", "expected": [{"doc_id", "filename", "pages"}], "tags", "notes"}.
+  expected [] marks a negative (unanswerable) question; tags and notes are optional.
+- Relevance is labelled per (doc_id, page_number), not chunk_id (chunk ids change
+  meaning when chunk settings change). Matching uses doc_id; filename is
+  informational. Get doc_ids with scripts/list_doc_ids.py <folder>.
+- Writing a real entry: ask a question in your own words, open the PDF, note every
+  page that answers it (any of them counts), copy the doc_id for that file, add tags.
+- Metrics over answerable questions only: hit@k (first relevant rank <= k) and
+  MRR@k (1/rank, 0 if > k or none).
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

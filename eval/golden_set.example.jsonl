@@ -1,0 +1,2 @@
+{"id": "example-answerable", "question": "FAKE EXAMPLE: what does the made-up document define on pages 2-3?", "expected": [{"doc_id": "0000000000000000000000000000000000000000000000000000000000000000", "filename": "FAKE_example.pdf", "pages": [2, 3]}], "tags": ["example", "definition"], "notes": "FAKE: replace with a real question, doc_id from scripts/list_doc_ids.py"}
+{"id": "example-negative", "question": "FAKE EXAMPLE: a question no ingested document answers", "expected": [], "tags": ["example", "negative"], "notes": "FAKE: expected [] marks an unanswerable question"}

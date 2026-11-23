@@ -17,9 +17,12 @@
 - Phase 5 Step 2 (ingestion orchestration for one document + tests + smoke check):
   COMPLETE (commit df9450d)
 - Phase 5 Step 3 (ingest_inbox: scan -> ingest -> move by status + tests + smoke):
-  COMPLETE
+  COMPLETE (commit 4dc8c15)
 - Phase 5 (ChromaDB + SQLite + ingestion orchestration + inbox lifecycle): COMPLETE
-- Next: Phase 5 complete -> Phase 6 Step 1: retrieval prototype + golden evaluation set
+  (commit 4dc8c15)
+- Phase 6 Step 1 (retrieval with done-filter + evaluation primitives, no LLM, no real
+  evaluation run): COMPLETE (not committed)
+- Next: Phase 6 Step 2: write the real golden set and run the first evaluation
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -209,7 +212,32 @@
   + password in failed (attempts 3), inbox empty, Chroma 86, SQLite 7. Query top-1
   Lecture07 page 4, 0.838088. data/inbox names, sizes and mtimes identical before
   and after
-- 539 pytest tests passing
+- Chroma 1.5.9 probe (temp dir, 9 fake 4-dim vectors, docs A/B/C x 3):
+  query(query_embeddings, where={"doc_id": {"$in": [...]}}) works; one-element list
+  works; n_results > matches returns all matches without error ($in [B], n=50 -> 3);
+  no match -> []; EMPTY list -> builtins.ValueError "Expected where operand value to
+  be a non-empty list ..." (not a ChromaError); filtered order equals the unfiltered
+  order minus the excluded documents
+- retrieve(): only chunks of done documents (failed doc with the query's own vector
+  excluded at top_k 1/3/50; pending, processing, failed, needs_ocr and unregistered
+  doc_ids excluded); no done docs -> [] without embedding or querying; top_k >
+  matches -> all matches; order by distance across documents; invalid query/top_k
+  -> RetrievalError; recover_interrupted never called (spy; processing row stays
+  processing); no chunk or query text in logs (tests only, tmp stores, stub model)
+- build_retrieval_context(): missing status db or Chroma folder -> RetrievalError
+  and nothing created; folder present but collection missing -> RetrievalError
+  "Collection 'chunks' not found ...; run ingestion first" and a fresh client still
+  lists no such collection; model/collection mismatch -> RetrievalError
+- open_collection(create=False): missing folder or collection ->
+  CollectionNotFoundError, nothing created; existing collection opens; saved model,
+  dimension and space still checked; create=True (default) unchanged
+- query_by_embedding(doc_ids=...): pre-filter in Chroma; empty / invalid doc_ids ->
+  VectorStoreError
+- evaluation.py: loader validation with line numbers (28 parametrized error cases), Roman Urdu +
+  emoji round-trip, UTF-8 BOM accepted; worked example ranks [1, 3, None] ->
+  hit@1 1/3, hit@5 2/3, MRR@5 (1 + 1/3)/3; rank > k is a miss
+- scripts/list_doc_ids.py: renamed copy -> same doc_id; folder unchanged (tests only)
+- 661 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -232,6 +260,10 @@
 - SQLite under concurrent access (busy timeout 5 s set, never exercised)
 - Status store on the real data/status.db (tests use tmp_path only)
 - A possible figure/table area on research paper page 3 (line-level column switches)
+- retrieve() and build_retrieval_context() on real data (real model, real stores):
+  tests use tmp stores and a stub model only; no real evaluation run yet (Step 2)
+- scripts/list_doc_ids.py on the real PDFs (tests only)
+- $in filter speed / limits with many done doc_ids (probe had 3 documents)
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -251,7 +283,8 @@
   embedding_local_files_only, chroma_path, chroma_collection_name, status_db_path,
   max_ingest_attempts
 - src/rag_pipeline/vector_store.py: open_collection, replace_document_chunks,
-  count_document_chunks, query_by_embedding, RetrievedChunk, VectorStoreError
+  count_document_chunks, query_by_embedding, RetrievedChunk, VectorStoreError,
+  CollectionNotFoundError
 - src/rag_pipeline/status_db.py: StatusStore (initialize, register_document,
   mark_processing/done/needs_ocr/failed, get_document, list_documents,
   known_doc_ids, recover_interrupted), DocumentRecord, DocumentStatus, StatusStoreError
@@ -260,10 +293,17 @@
 - src/rag_pipeline/inbox_ingestion.py: ingest_inbox, destination_for, safe_move,
   DestinationFolders, InboxRunReport, FileMove, LeftInInbox, MoveFailure
 - src/rag_pipeline/config.py also holds needs_ocr_dir
+- src/rag_pipeline/retrieval.py: build_retrieval_context, retrieve, done_doc_ids,
+  RetrievalContext, RetrievalError
+- src/rag_pipeline/evaluation.py: load_golden_set, first_relevant_rank, hit_at_k,
+  mrr_at_k, GoldenQuestion, ExpectedSource, GoldenSetError, DOC_ID_PATTERN
+- eval/golden_set.example.jsonl: 2 FAKE example lines (answerable + negative);
+  the real set will be eval/golden_set.jsonl (written by the user)
+- scripts/list_doc_ids.py: filename<TAB>doc_id for every *.pdf in a folder (read-only)
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
   test_embeddings.py, test_vector_store.py, test_status_db.py, test_ingestion.py,
-  test_inbox_ingestion.py
+  test_inbox_ingestion.py, test_retrieval.py, test_evaluation.py, test_list_doc_ids.py
 - .env.example: settings template
 - .env (local, git-ignored): only overrides (RAG_EMBEDDING_LOCAL_FILES_ONLY=true)
 - scripts/measure_chunk_tokens.py: one-off token measurement (reused in Phase 6)
@@ -382,6 +422,25 @@
   next run retries it (placement follows status), without re-ingestion
 - ingest_inbox: NEW files ingested first, then every file with a doc_id placed;
   scan ERROR files stay and are reported; StatusStoreError propagates
+- Retrieval returns only chunks of done documents: pre-filter inside Chroma
+  (where doc_id $in done ids, so top_k is taken among allowed chunks), plus a
+  post-check that raises if a non-done chunk ever comes back (filter regression)
+- No done documents -> [] before embedding or querying (Chroma rejects an empty $in)
+- query_by_embedding got an optional keyword doc_ids (None = unfiltered, as before)
+  instead of a second query function; done ids come from the existing
+  StatusStore.list_documents(DONE) (no new StatusStore method, no schema change)
+- The read path never calls recover_interrupted (ingestion startup only) and never
+  creates stores: build_retrieval_context requires the status db file, the Chroma
+  folder and the collection to exist (RetrievalError "run ingestion first"); it opens
+  the collection with open_collection(..., create=False) (keyword, default True keeps
+  the ingestion behaviour); CollectionNotFoundError subclasses VectorStoreError
+- retrieve(query, context, top_k): top_k is an explicit argument (no new setting yet)
+- Golden set relevance is labelled per (doc_id, page), never chunk_id; matching on
+  doc_id only (filename informational); expected [] = negative question
+- hit_at_k / mrr_at_k take ranks of answerable questions only and raise ValueError on
+  empty input (undefined metric, no misleading 0.0); negatives are excluded by the
+  caller
+- Golden set loader accepts a UTF-8 BOM (Windows PowerShell 5.1 writes one)
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -435,8 +494,8 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - A document stuck in processing is invisible to scans until the next startup
   recovery
 - A failed document may keep no or partial chunks in Chroma (upsert failure after
-  delete); queries can still return them until a retry succeeds -> consider
-  filtering query results to done doc_ids (Phase 6/7)
+  delete); retrieve() excludes them (done-filter, Phase 6 Step 1), but raw
+  query_by_embedding without doc_ids still returns them
 - Expected failures are logged once by extraction and once by ingestion (one line,
   no traceback)
 - ingestion passes Settings.model_construct(chunk_size, chunk_overlap) to
@@ -453,7 +512,16 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - safe_move on non-Windows uses hard link + unlink (untested); a crash between them
   leaves the file in both places -> next run moves the inbox copy as 'name (1).pdf'
   (no loss, one extra copy). Test on Linux before Docker (Phase 13).
+- A document whose status changes between reading the done ids and the Chroma query
+  can still appear in that one retrieve() call (no lock across SQLite and Chroma)
+- The $in list grows with every done document; fine at this scale, unmeasured for
+  many documents
+- build_retrieval_context on an existing but EMPTY Chroma folder: no collection is
+  created (RetrievalError), but the Chroma client writes its own chroma.sqlite3 into
+  the folder (probe: before [], after ['chroma.sqlite3'])
+- retrieval.py imports the ModelLoader type alias from ingestion.py
 
 ## Next precise task
-Phase 6 Step 1 — retrieval prototype + golden evaluation set (no LLM): filter query
-results to done doc_ids; 10-15 questions with expected document/page; hit@k and MRR.
+Phase 6 Step 2 — real golden set + first evaluation run (no LLM): user writes
+eval/golden_set.jsonl (10-15 questions, doc_ids via scripts/list_doc_ids.py);
+ingest into the real stores; run retrieve() per question and report hit@k / MRR@k.

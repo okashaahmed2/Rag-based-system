@@ -23,6 +23,7 @@ from rag_pipeline.embeddings import ChunkEmbeddings
 from rag_pipeline.preparation import DocumentChunk
 from rag_pipeline.vector_store import (
     DISTANCE_SPACE,
+    CollectionNotFoundError,
     RetrievedChunk,
     VectorStoreError,
     count_document_chunks,
@@ -261,6 +262,65 @@ def test_existing_collection_with_other_space_raises(store_path: Path) -> None:
 def test_open_rejects_invalid_arguments(store_path: Path, model: str, dim: int) -> None:
     with pytest.raises(VectorStoreError):
         open_collection(store_path, NAME, model, dim)
+
+
+def test_open_without_create_missing_folder_raises_and_creates_nothing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "absent" / "store"
+
+    with pytest.raises(CollectionNotFoundError, match="folder .* not found"):
+        open_collection(path, NAME, MODEL, DIM, create=False)
+    assert not (tmp_path / "absent").exists()
+
+
+def test_open_without_create_missing_collection_raises_and_creates_nothing(
+    store_path: Path,
+) -> None:
+    raw_client(store_path).create_collection("other", embedding_function=None)
+    SharedSystemClient.clear_system_cache()
+
+    with pytest.raises(CollectionNotFoundError, match=f"Collection '{NAME}' not found"):
+        open_collection(store_path, NAME, MODEL, DIM, create=False)
+
+    SharedSystemClient.clear_system_cache()
+    assert [c.name for c in raw_client(store_path).list_collections()] == ["other"]
+
+
+def test_open_without_create_opens_existing_collection(
+    store_path: Path, rng: np.random.Generator
+) -> None:
+    store_doc(open_collection(store_path, NAME, MODEL, DIM), rng, DOC_A, 2)
+    SharedSystemClient.clear_system_cache()
+
+    reopened = open_collection(store_path, NAME, MODEL, DIM, create=False)
+
+    assert count_document_chunks(reopened, DOC_A) == 2
+
+
+@pytest.mark.parametrize("model, dim", [("other/model", DIM), (MODEL, DIM + 1)])
+def test_open_without_create_still_checks_saved_settings(
+    store_path: Path, model: str, dim: int
+) -> None:
+    open_collection(store_path, NAME, MODEL, DIM)
+    SharedSystemClient.clear_system_cache()
+
+    with pytest.raises(VectorStoreError, match="does not match the current settings") as info:
+        open_collection(store_path, NAME, model, dim, create=False)
+    assert not isinstance(info.value, CollectionNotFoundError)
+
+
+def test_open_without_create_still_checks_space(store_path: Path) -> None:
+    raw_client(store_path).create_collection(
+        NAME,
+        configuration={"hnsw": {"space": "l2"}},
+        metadata={"embedding_model": MODEL, "embedding_dim": DIM},
+        embedding_function=None,
+    )
+    SharedSystemClient.clear_system_cache()
+
+    with pytest.raises(VectorStoreError, match="space"):
+        open_collection(store_path, NAME, MODEL, DIM, create=False)
 
 
 def test_open_wraps_invalid_collection_name(store_path: Path) -> None:
@@ -559,6 +619,49 @@ def test_query_invalid_top_k_raises(
 ) -> None:
     with pytest.raises(VectorStoreError, match="top_k"):
         query_by_embedding(collection, unit_vectors(rng, 1)[0], top_k=top_k)
+
+
+def test_query_doc_ids_filter_keeps_only_listed_documents(
+    collection: Collection, rng: np.random.Generator
+) -> None:
+    chunks_a, emb_a = store_doc(collection, rng, DOC_A, 4)
+    store_doc(collection, rng, DOC_B, 4)
+    query = emb_a.vectors[0]
+
+    only_b = query_by_embedding(collection, query, top_k=2, doc_ids={DOC_B})
+    both = query_by_embedding(collection, query, top_k=8, doc_ids={DOC_A, DOC_B})
+    unfiltered = query_by_embedding(collection, query, top_k=8)
+
+    assert len(only_b) == 2 and {r.doc_id for r in only_b} == {DOC_B}
+    assert [r.chunk_id for r in both] == [r.chunk_id for r in unfiltered]
+    assert both[0].chunk_id == chunks_a[0].chunk_id
+
+
+def test_query_doc_ids_top_k_larger_than_matches_returns_all_matches(
+    collection: Collection, rng: np.random.Generator
+) -> None:
+    store_doc(collection, rng, DOC_A, 3)
+    store_doc(collection, rng, DOC_B, 5)
+
+    results = query_by_embedding(collection, unit_vectors(rng, 1)[0], top_k=50, doc_ids={DOC_A})
+
+    assert len(results) == 3 and {r.doc_id for r in results} == {DOC_A}
+
+
+def test_query_doc_ids_without_matches_returns_empty(
+    collection: Collection, rng: np.random.Generator
+) -> None:
+    store_doc(collection, rng, DOC_A, 2)
+
+    assert query_by_embedding(collection, unit_vectors(rng, 1)[0], top_k=5, doc_ids={"c" * 64}) == []
+
+
+@pytest.mark.parametrize("doc_ids", [set(), frozenset(), {""}, {DOC_A, 5}])
+def test_query_invalid_doc_ids_raise(
+    collection: Collection, rng: np.random.Generator, doc_ids: Any
+) -> None:
+    with pytest.raises(VectorStoreError, match="doc_ids must"):
+        query_by_embedding(collection, unit_vectors(rng, 1)[0], top_k=1, doc_ids=doc_ids)
 
 
 def test_query_non_finite_vector_raises(collection: Collection) -> None:

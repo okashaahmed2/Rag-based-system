@@ -197,3 +197,25 @@
 - Real smoke check (scripts/inbox_smoke.py, temp copy of data/inbox): run 1 -> 5 in
   processed, scanned in needs_ocr, invalid + password stay; run 3 -> both in failed,
   inbox empty; Chroma 86, SQLite 7; top-1 Lecture07 p4 0.838088; data/inbox unchanged.
+- Step 3 committed 4dc8c15 and pushed.
+
+## 2026-11-23 — Phase 6
+- Step 1 probe (temp dir, fake vectors): Chroma 1.5.9 query with query_embeddings and
+  where={"doc_id": {"$in": [...]}} works with several ids and with one; n_results
+  larger than the matches returns all matches; no match -> []; an empty $in list
+  raises builtins.ValueError (not ChromaError).
+- Step 1: retrieval.py with build_retrieval_context (no recover_interrupted; missing
+  status db / Chroma folder -> RetrievalError, nothing created) and retrieve (validate
+  -> done ids -> [] if none -> embed -> Chroma pre-filter $in done ids -> post-check).
+  vector_store.query_by_embedding got an optional doc_ids filter. evaluation.py with
+  load_golden_set (JSON Lines, strict, line-numbered errors), first_relevant_rank
+  (doc_id + page), hit_at_k, mrr_at_k. scripts/list_doc_ids.py and
+  eval/golden_set.example.jsonl (2 fake lines). 34 retrieval + 7 vector store +
+  69 evaluation + 4 list_doc_ids tests. 653 tests passing.
+- No real evaluation run and no real-data retrieval yet (Step 2).
+- Review fix: the read path no longer creates a missing collection.
+  open_collection(..., create=False) raises CollectionNotFoundError (saved
+  model/dim/space still checked); build_retrieval_context maps it to RetrievalError
+  "...; run ingestion first". Found: on an existing empty Chroma folder the client
+  still writes chroma.sqlite3 (no collection). 6 vector store + 2 retrieval tests.
+  661 tests passing.

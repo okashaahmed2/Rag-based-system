@@ -23,6 +23,7 @@ import logging
 import math
 import warnings
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,11 @@ _REQUIRED_CHUNK_KEYS = ("doc_id", "filename", "page_number", "chunk_index")
 
 class VectorStoreError(Exception):
     """Raised when the vector store cannot be opened, written or queried."""
+
+
+class CollectionNotFoundError(VectorStoreError):
+    """Raised by ``open_collection(..., create=False)`` when the store folder or
+    the collection does not exist."""
 
 
 @dataclass(frozen=True)
@@ -124,7 +130,12 @@ def _check_saved_settings(
 
 
 def open_collection(
-    path: Path, name: str, embedding_model: str, embedding_dim: int
+    path: Path,
+    name: str,
+    embedding_model: str,
+    embedding_dim: int,
+    *,
+    create: bool = True,
 ) -> Collection:
     """Open the chunk collection at ``path``, creating it if it does not exist.
 
@@ -134,7 +145,14 @@ def open_collection(
     distance and that metadata. The directory is created if missing.
     Telemetry is off and no embedding function is attached.
 
+    With ``create=False`` (read path) neither the directory nor the
+    collection is created: a missing one raises
+    :class:`CollectionNotFoundError`. The saved settings are checked the same
+    way.
+
     Raises:
+        CollectionNotFoundError: ``create=False`` and the directory or the
+            collection does not exist.
         VectorStoreError: invalid arguments, the directory or store cannot be
             opened, or the saved settings differ (or are missing).
     """
@@ -142,8 +160,11 @@ def open_collection(
         raise VectorStoreError("embedding_model must not be empty")
     if embedding_dim < 1:
         raise VectorStoreError(f"embedding_dim must be >= 1, got {embedding_dim}")
+    if not create and not path.is_dir():
+        raise CollectionNotFoundError(f"Vector store folder {path} not found")
     try:
-        path.mkdir(parents=True, exist_ok=True)
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
         client = chromadb.PersistentClient(
             path=str(path), settings=ChromaSettings(anonymized_telemetry=False)
         )
@@ -155,7 +176,11 @@ def open_collection(
         try:
             collection = client.get_collection(name, embedding_function=None)
             created = False
-        except NotFoundError:
+        except NotFoundError as exc:
+            if not create:
+                raise CollectionNotFoundError(
+                    f"Collection {name!r} not found at {path}"
+                ) from exc
             try:
                 collection = client.create_collection(
                     name,
@@ -367,20 +392,38 @@ def _to_retrieved(
 
 
 def query_by_embedding(
-    collection: Collection, query_vector: npt.ArrayLike, top_k: int
+    collection: Collection,
+    query_vector: npt.ArrayLike,
+    top_k: int,
+    *,
+    doc_ids: AbstractSet[str] | None = None,
 ) -> list[RetrievedChunk]:
     """Return up to ``top_k`` chunks nearest to ``query_vector``, nearest first.
 
     Uses ``query_embeddings`` only (no text embedding in Chroma). A ``top_k``
-    larger than the collection returns every chunk; an empty collection
-    returns ``[]``.
+    larger than the collection (or than the matching chunks) returns every
+    match; an empty collection returns ``[]``.
+
+    ``doc_ids`` (optional) restricts the search to chunks of these documents
+    inside Chroma (``where={"doc_id": {"$in": [...]}}``), so the ``top_k``
+    nearest chunks are taken among the allowed documents only. It must not be
+    empty: Chroma 1.5.9 rejects an empty ``$in`` list with a ``ValueError``,
+    so a caller with no allowed documents must not query at all.
 
     Raises:
-        VectorStoreError: ``top_k < 1``, the vector is not 1-D with the
+        VectorStoreError: ``top_k < 1``, ``doc_ids`` is empty or holds a
+            non-string or empty value, the vector is not 1-D with the
             collection's dimension or is not finite, or the query fails.
     """
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1:
         raise VectorStoreError(f"top_k must be an int >= 1, got {top_k!r}")
+    where: dict[str, Any] | None = None
+    if doc_ids is not None:
+        if not doc_ids:
+            raise VectorStoreError("doc_ids must not be empty (query nothing instead)")
+        if not all(isinstance(d, str) and d for d in doc_ids):
+            raise VectorStoreError("doc_ids must be non-empty strings")
+        where = {"doc_id": {"$in": sorted(doc_ids)}}
     _, dim = _collection_model_and_dim(collection)
     vector = np.asarray(query_vector, dtype=np.float32)
     if vector.shape != (dim,):
@@ -394,6 +437,7 @@ def query_by_embedding(
         result = collection.query(
             query_embeddings=[vector],
             n_results=top_k,
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
     except ChromaError as exc:
