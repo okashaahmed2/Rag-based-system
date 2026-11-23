@@ -343,6 +343,8 @@
   doc_ids done, score via build_retrieval_context + retrieve, write
   eval/results/<date>_<config>.json, print ASCII summary
 - eval/results/2026-11-23_all-minilm-l6-v2_600_120.json: baseline result (tracked)
+- scripts/compare_eval.py: BASE.json OTHER.json [...] -> metrics with deltas, rank
+  changes, outside-top-5 flags, similarity, decision rule check (ASCII)
 - data/eval/ (git-ignored): corpus copy + eval stores
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
@@ -505,6 +507,12 @@
   data/eval/ is ignored
 - A same-day re-run overwrites the result file and reports whether the results are
   identical to the previous file
+- PRE-REGISTERED DECISION RULE (recorded 2026-11-23, before any Step 3 run): 600/120
+  is replaced only if a config keeps hit@5 = 1.000, improves MRR@10 by >= 0.05, and
+  drops no answerable question out of the top 5. Otherwise 600/120 stays (it keeps
+  every measured chunk <= 256 tokens). scripts/compare_eval.py checks it mechanically
+- run_eval.py dirty flag: any modified/staged/untracked file means dirty, except
+  UNTRACKED files under eval/results/ (earlier result files)
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -512,7 +520,6 @@
 - Roman Urdu notes (all-MiniLM-L6-v2 vs a multilingual model): baseline roman_urdu
   hit@1 0.600, hit@5 1.000, MRR@10 0.750 (5 questions, all from one document, so not
   a language verdict); decision pending Step 3
-  (all-MiniLM-L6-v2 vs a multilingual model).
 
 ## Verified versions
 Python 3.11.9 | pip 26.3 | setuptools 84.2.1 (upgraded from 65.5.0 by the
@@ -599,9 +606,8 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   changing it requires a new store (manifest refuses a changed corpus)
 - Each eval run retries the invalid and password PDFs until they reach
   max_ingest_attempts (3), then they are skipped (ingestion behaviour, unchanged)
-- run_eval.py's dirty flag counts untracked files too (git status --porcelain), so an
-  untracked result file from an earlier run marks the next run dirty; the clean
-  baseline was regenerated with the old file moved aside (commit 8bcba2b, dirty false)
+- The baseline result (commit 8bcba2b) was regenerated clean with the old untracked
+  result file moved aside; fixed in Step 3a (untracked eval/results/ files ignored)
 
 ## Next precise task
 Phase 6 Step 3 — configuration comparison (no LLM): run scripts/run_eval.py for other

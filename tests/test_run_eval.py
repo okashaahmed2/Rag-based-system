@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -336,6 +337,80 @@ def test_run_retrieval_scores_only_done_documents(inbox: Path, paths: Any) -> No
     lines = run_eval.summary_lines(result, manifest, ingest)
     assert all(line.isascii() for line in lines)
     assert any(line.startswith("OVERALL") for line in lines)
+
+
+# --- dirty flag ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "porcelain, dirty",
+    [
+        ("", False),
+        ("?? eval/results/2026-11-23_x.json\0", False),
+        ("?? eval/results/a.json\0?? eval/results/sub/b.json\0", False),
+        ("?? eval/results/a.json\0?? notes.txt\0", True),
+        ("?? eval/other.json\0", True),
+        ("?? eval/resultsX/a.json\0", True),
+        (" M src/rag_pipeline/evaluation.py\0", True),
+        (" M eval/results/2026-11-23_x.json\0", True),  # tracked result file modified
+        ("A  eval/results/new.json\0", True),  # staged result file
+        ("R  new_name.py\0old_name.py\0", True),
+    ],
+)
+def test_is_dirty_ignores_only_untracked_result_files(porcelain: str, dirty: bool) -> None:
+    assert run_eval.is_dirty(porcelain) is dirty
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *args],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A throwaway git repo with one commit (tracked.txt + eval/results/old.json)."""
+    root = tmp_path / "repo"
+    (root / "eval" / "results").mkdir(parents=True)
+    (root / "tracked.txt").write_text("v1\n", encoding="utf-8")
+    (root / "eval" / "results" / "old.json").write_text("{}\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "init")
+    return root
+
+
+def test_git_state_clean_repo(repo: Path) -> None:
+    state = run_eval.git_state(repo)
+
+    assert state["dirty"] is False
+    assert len(state["commit"]) == 40
+
+
+def test_git_state_untracked_result_file_is_clean(repo: Path) -> None:
+    (repo / "eval" / "results" / "2026-11-23_new.json").write_text("{}\n", encoding="utf-8")
+
+    assert run_eval.git_state(repo)["dirty"] is False
+
+
+def test_git_state_untracked_file_elsewhere_is_dirty(repo: Path) -> None:
+    (repo / "eval" / "results" / "2026-11-23_new.json").write_text("{}\n", encoding="utf-8")
+    (repo / "scratch.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert run_eval.git_state(repo)["dirty"] is True
+
+
+def test_git_state_modified_tracked_file_is_dirty(repo: Path) -> None:
+    (repo / "tracked.txt").write_text("v2\n", encoding="utf-8")
+
+    assert run_eval.git_state(repo)["dirty"] is True
+
+
+def test_git_state_modified_tracked_result_file_is_dirty(repo: Path) -> None:
+    (repo / "eval" / "results" / "old.json").write_text('{"changed": 1}\n', encoding="utf-8")
+
+    assert run_eval.git_state(repo)["dirty"] is True
 
 
 def test_summary_names_the_ingested_file_not_a_later_duplicate() -> None:

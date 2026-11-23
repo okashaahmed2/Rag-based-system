@@ -242,3 +242,9 @@
   JSON (Chroma metadata) was correct. Fixed: summary uses the hit's filename, falling
   back to the first corpus file; regression test added.
 - Step 2 committed 8bcba2b; baseline regenerated clean (dirty=false).
+- Step 3a: decision rule pre-registered in PROJECT_STATE before any run (replace
+  600/120 only if hit@5 stays 1.000, MRR@10 +>= 0.05, no answerable question leaves
+  the top 5). run_eval dirty flag now ignores only untracked eval/results/ files
+  (git status --porcelain=v1 -z --untracked-files=all; tested on a tmp git repo).
+  scripts/compare_eval.py (metrics + deltas, rank changes, outside-top-5 flags,
+  similarity, rule check; refuses different golden sets / ks).

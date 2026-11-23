@@ -279,6 +279,33 @@ def run_retrieval(
     return evaluate(questions, retrieve_hits, ks)
 
 
+#: Untracked files under this prefix (earlier result files) do not make a run dirty.
+RESULTS_PREFIX = RESULTS_DIR.as_posix() + "/"
+
+
+def is_dirty(porcelain_z: str) -> bool:
+    """Whether ``git status --porcelain=v1 -z`` output means uncommitted changes.
+
+    Every entry counts, except UNTRACKED (``??``) paths under ``eval/results/``:
+    result files of earlier runs must not mark the next run dirty. A modified
+    or staged tracked file under ``eval/results/`` still counts.
+    """
+    entries = porcelain_z.split("\0")
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry:
+            continue
+        code, path = entry[:2], entry[3:]
+        if code[0] in "RC":
+            index += 1  # renames/copies carry the source path as the next entry
+        if code == "??" and path.startswith(RESULTS_PREFIX):
+            continue
+        return True
+    return False
+
+
 def git_state(project_root: Path) -> dict[str, Any]:
     """Current commit hash and whether the working tree has uncommitted changes."""
     try:
@@ -287,13 +314,13 @@ def git_state(project_root: Path) -> dict[str, Any]:
             text=True, check=True,
         ).stdout.strip()
         status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=project_root, capture_output=True,
-            text=True, check=True,
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=project_root, capture_output=True, text=True, check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
         logger.warning("Could not read git state: %s", exc)
         return {"commit": None, "dirty": None}
-    return {"commit": commit, "dirty": bool(status.strip())}
+    return {"commit": commit, "dirty": is_dirty(status)}
 
 
 # --- output ----------------------------------------------------------------------
