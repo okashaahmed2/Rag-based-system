@@ -219,3 +219,11 @@
   "...; run ingestion first". Found: on an existing empty Chroma folder the client
   still writes chroma.sqlite3 (no collection). 6 vector store + 2 retrieval tests.
   661 tests passing.
+- Step 1 committed 8a641b4 and pushed.
+- Step 2 prep: golden set drafted from extract_pdf page text + keyword search only (no
+  embeddings/Chroma), longest word run shared with the source page <= 3; mentor
+  cross-checked every doc_id, page and negative with pdftotext. Promoted to
+  eval/golden_set.jsonl changing only notes (all other fields proven identical per
+  id); draft deleted. 15 questions (13 answerable, 2 negative; 4 LACE, 4 Lecture07,
+  5 Roman Urdu notes). Found: SVM,K-mean,KNN.pdf is the Roman Urdu notes, so the
+  roman_urdu tag is confounded with one document. 661 tests passing.

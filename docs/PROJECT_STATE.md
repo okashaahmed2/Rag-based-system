@@ -21,7 +21,7 @@
 - Phase 5 (ChromaDB + SQLite + ingestion orchestration + inbox lifecycle): COMPLETE
   (commit 4dc8c15)
 - Phase 6 Step 1 (retrieval with done-filter + evaluation primitives, no LLM, no real
-  evaluation run): COMPLETE (not committed)
+  evaluation run): COMPLETE (commit 8a641b4)
 - Next: Phase 6 Step 2: write the real golden set and run the first evaluation
 
 ## Verified (with evidence)
@@ -237,6 +237,13 @@
   emoji round-trip, UTF-8 BOM accepted; worked example ranks [1, 3, None] ->
   hit@1 1/3, hit@5 2/3, MRR@5 (1 + 1/3)/3; rank > k is a miss
 - scripts/list_doc_ids.py: renamed copy -> same doc_id; folder unchanged (tests only)
+- Golden set eval/golden_set.jsonl verified 2026-11-23 (PyMuPDF draft + pdftotext
+  cross-check of every doc_id, page and negative): 15 questions, 13 answerable,
+  2 negative; 4 LACE paper, 4 Lecture07, 5 SVM/KNN/K-Means Roman Urdu notes; tags
+  comparison 4, definition 2, fact 5, table 2, roman_urdu 5, negative 2;
+  load_golden_set passes. SVM,K-mean,KNN.pdf IS the 36-page Roman Urdu notes
+  (264 of 2405 words are hai/ka/ki/ke/nahi/aur/mein/ko); there is no separate
+  English SVM document
 - 661 pytest tests passing
 
 ## Not yet verified / incomplete
@@ -297,8 +304,8 @@
   RetrievalContext, RetrievalError
 - src/rag_pipeline/evaluation.py: load_golden_set, first_relevant_rank, hit_at_k,
   mrr_at_k, GoldenQuestion, ExpectedSource, GoldenSetError, DOC_ID_PATTERN
-- eval/golden_set.example.jsonl: 2 FAKE example lines (answerable + negative);
-  the real set will be eval/golden_set.jsonl (written by the user)
+- eval/golden_set.example.jsonl: 2 FAKE example lines (answerable + negative)
+- eval/golden_set.jsonl: verified golden evaluation set (15 questions)
 - scripts/list_doc_ids.py: filename<TAB>doc_id for every *.pdf in a folder (read-only)
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
@@ -520,6 +527,9 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   created (RetrievalError), but the Chroma client writes its own chroma.sqlite3 into
   the folder (probe: before [], after ['chroma.sqlite3'])
 - retrieval.py imports the ModelLoader type alias from ingestion.py
+- roman_urdu tag is confounded with one document: all 5 roman_urdu questions come
+  from SVM,K-mean,KNN.pdf, so a per-tag score cannot separate "Roman Urdu text"
+  from "this document" (e.g. its formula/diagram extraction)
 
 ## Next precise task
 Phase 6 Step 2 — real golden set + first evaluation run (no LLM): user writes
