@@ -40,6 +40,12 @@ MIN_CHUNK_SIZE = 100
 MIN_LLM_NUM_CTX = 512
 #: Largest allowed ``llm_temperature`` setting.
 MAX_LLM_TEMPERATURE = 2.0
+#: Allowed range of the ``llm_max_answer_tokens`` setting.
+MIN_LLM_MAX_ANSWER_TOKENS = 16
+MAX_LLM_MAX_ANSWER_TOKENS = 2048
+#: Allowed range of the ``query_top_k`` setting.
+MIN_QUERY_TOP_K = 1
+MAX_QUERY_TOP_K = 20
 
 
 class Settings(BaseSettings):
@@ -86,14 +92,19 @@ class Settings(BaseSettings):
     #: 127.0.0.1, not localhost: on Windows localhost resolves to ::1 first while
     #: Ollama listens on IPv4 only, measured at ~2.2 s extra per new connection.
     ollama_base_url: str = "http://127.0.0.1:11434"
-    #: Ollama model used to generate answers.
-    llm_model: str = "granite4.2:3b"
+    #: Ollama model used to generate answers. granite4.2:3b was rejected: its template
+    #: enables thinking, think:false leaks reasoning, and answers took 60-150 s on CPU.
+    llm_model: str = "llama3.2:3b"
     #: Sampling temperature (0 = deterministic).
     llm_temperature: float = 0.0
     #: Context window requested from Ollama, in tokens (prompt + answer).
     llm_num_ctx: int = 4096
     #: Timeout of one HTTP request to Ollama, in seconds.
     llm_timeout_seconds: float = 120.0
+    #: Most tokens the LLM may generate per answer (Ollama ``num_predict``).
+    llm_max_answer_tokens: int = 256
+    #: Number of chunks retrieved and sent to the LLM per question.
+    query_top_k: int = 5
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -174,6 +185,28 @@ class Settings(BaseSettings):
         """Require ``llm_timeout_seconds > 0`` (NaN rejected)."""
         if not value > 0:
             raise ValueError(f"RAG_LLM_TIMEOUT_SECONDS must be > 0, got {value}")
+        return value
+
+    @field_validator("llm_max_answer_tokens")
+    @classmethod
+    def _check_llm_max_answer_tokens(cls, value: int) -> int:
+        """Require ``MIN_LLM_MAX_ANSWER_TOKENS <= value <= MAX_LLM_MAX_ANSWER_TOKENS``."""
+        if not MIN_LLM_MAX_ANSWER_TOKENS <= value <= MAX_LLM_MAX_ANSWER_TOKENS:
+            raise ValueError(
+                f"RAG_LLM_MAX_ANSWER_TOKENS must be between {MIN_LLM_MAX_ANSWER_TOKENS} "
+                f"and {MAX_LLM_MAX_ANSWER_TOKENS}, got {value}"
+            )
+        return value
+
+    @field_validator("query_top_k")
+    @classmethod
+    def _check_query_top_k(cls, value: int) -> int:
+        """Require ``MIN_QUERY_TOP_K <= query_top_k <= MAX_QUERY_TOP_K``."""
+        if not MIN_QUERY_TOP_K <= value <= MAX_QUERY_TOP_K:
+            raise ValueError(
+                f"RAG_QUERY_TOP_K must be between {MIN_QUERY_TOP_K} and "
+                f"{MAX_QUERY_TOP_K}, got {value}"
+            )
         return value
 
     @model_validator(mode="after")

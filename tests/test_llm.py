@@ -92,7 +92,7 @@ def test_llm_settings_defaults() -> None:
     settings = make_settings()
 
     assert settings.ollama_base_url == "http://127.0.0.1:11434"
-    assert settings.llm_model == "granite4.2:3b"
+    assert settings.llm_model == "llama3.2:3b"
     assert settings.llm_temperature == 0.0
     assert settings.llm_num_ctx == 4096
     assert settings.llm_timeout_seconds == 120.0
@@ -178,7 +178,7 @@ def test_non_numeric_llm_settings_raise(
 
 def test_chat_request_body_is_exactly_as_expected() -> None:
     recorder = Recorder(json_handler(chat_body()))
-    settings = make_settings(llm_temperature=0.3, llm_num_ctx=2048)
+    settings = make_settings(llm_temperature=0.3, llm_num_ctx=2048, llm_max_answer_tokens=128)
 
     chat(MESSAGES, settings, client=recorder.client())
 
@@ -187,11 +187,11 @@ def test_chat_request_body_is_exactly_as_expected() -> None:
     assert request.method == "POST"
     assert str(request.url) == "http://127.0.0.1:11434/api/chat"
     assert json.loads(request.content) == {
-        "model": "granite4.2:3b",
+        "model": "llama3.2:3b",
         "messages": MESSAGES,
         "stream": False,
         "think": False,
-        "options": {"temperature": 0.3, "num_ctx": 2048},
+        "options": {"temperature": 0.3, "num_ctx": 2048, "num_predict": 128},
     }
 
 
@@ -234,7 +234,81 @@ def test_chat_parses_success_and_converts_ns_to_seconds() -> None:
         eval_seconds=pytest.approx(1.07),
         total_seconds=pytest.approx(7.41),
         truncated=False,
+        thinking_leaked=False,
     )
+
+
+def test_default_num_predict_is_max_answer_tokens() -> None:
+    recorder = Recorder(json_handler(chat_body()))
+
+    chat(MESSAGES, make_settings(), client=recorder.client())
+
+    assert json.loads(recorder.requests[0].content)["options"]["num_predict"] == 256
+
+
+# --------------------------------------------------------------------------- leaked thinking
+
+
+def content_body(content: str) -> dict[str, Any]:
+    return chat_body(message={"role": "assistant", "content": content})
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_text", "leaked"),
+    [
+        (f"{THINKING_SECRET} reasoning\n</think>\n{ANSWER_SECRET} [S1]  ", f"{ANSWER_SECRET} [S1]", True),
+        (
+            f"<think>{THINKING_SECRET}</think>draft</think>\n  {ANSWER_SECRET}\n",
+            ANSWER_SECRET,
+            True,
+        ),
+        (f"<think>\n{THINKING_SECRET} never closed", "", True),
+        (f"{THINKING_SECRET}</think>", "", True),
+        (f"  {ANSWER_SECRET} [S1]\n", f"  {ANSWER_SECRET} [S1]\n", False),
+        ("a < b and <thinking> is not a tag", "a < b and <thinking> is not a tag", False),
+    ],
+)
+def test_leaked_thinking_is_stripped(content: str, expected_text: str, leaked: bool) -> None:
+    result = chat(MESSAGES, make_settings(), client=Recorder(json_handler(content_body(content))).client())
+
+    assert result.text == expected_text
+    assert result.thinking_leaked is leaked
+
+
+def test_leaked_thinking_warning_has_counts_only(caplog: pytest.LogCaptureFixture) -> None:
+    content = f"{THINKING_SECRET}\n</think>\n{ANSWER_SECRET}"
+    caplog.set_level(logging.DEBUG)
+
+    chat(MESSAGES, make_settings(), client=Recorder(json_handler(content_body(content))).client())
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert f"({len(content)} chars)" in warnings[0]
+    assert f"kept the {len(ANSWER_SECRET)} chars" in warnings[0]
+    assert THINKING_SECRET not in caplog.text
+    assert ANSWER_SECRET not in caplog.text
+
+
+def test_no_leak_warning_without_tags(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger="rag_pipeline.llm")
+
+    result = chat(MESSAGES, make_settings(), client=Recorder(json_handler(chat_body())).client())
+
+    assert result.thinking_leaked is False
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_thinking_field_and_leak_are_independent(caplog: pytest.LogCaptureFixture) -> None:
+    body = chat_body(
+        message={"role": "assistant", "content": f"x</think>{ANSWER_SECRET}", "thinking": "t"}
+    )
+    caplog.set_level(logging.DEBUG, logger="rag_pipeline.llm")
+
+    result = chat(MESSAGES, make_settings(), client=Recorder(json_handler(body)).client())
+
+    assert result.text == ANSWER_SECRET
+    assert result.thinking_leaked is True
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 2
 
 
 def test_llm_response_is_frozen() -> None:
@@ -349,9 +423,9 @@ def test_timeouts_raise_llm_timeout_error(exc_type: type[httpx.TransportError]) 
 
 
 def test_404_raises_model_not_found_with_pull_hint() -> None:
-    recorder = Recorder(json_handler({"error": "model 'granite4.2:3b' not found"}, status=404))
+    recorder = Recorder(json_handler({"error": "model 'llama3.2:3b' not found"}, status=404))
 
-    with pytest.raises(LLMModelNotFoundError, match=r"run: ollama pull granite4\.2:3b"):
+    with pytest.raises(LLMModelNotFoundError, match=r"run: ollama pull llama3\.2:3b"):
         chat(MESSAGES, make_settings(), client=recorder.client())
 
 
@@ -474,16 +548,16 @@ def tags_router(models: list[dict[str, Any]], version: str = "0.40.17") -> Handl
 
 
 def test_check_ollama_model_present() -> None:
-    recorder = Recorder(tags_router([{"name": "nomic:latest"}, {"name": "granite4.2:3b"}]))
+    recorder = Recorder(tags_router([{"name": "nomic:latest"}, {"name": "llama3.2:3b"}]))
 
     info = check_ollama(make_settings(), client=recorder.client())
 
     assert info == {
         "base_url": "http://127.0.0.1:11434",
         "version": "0.40.17",
-        "model": "granite4.2:3b",
+        "model": "llama3.2:3b",
         "model_present": True,
-        "installed_models": ["nomic:latest", "granite4.2:3b"],
+        "installed_models": ["nomic:latest", "llama3.2:3b"],
     }
     assert [(r.method, str(r.url)) for r in recorder.requests] == [
         ("GET", "http://127.0.0.1:11434/api/version"),
@@ -500,16 +574,16 @@ def test_check_ollama_untagged_model_matches_latest() -> None:
 
 
 def test_check_ollama_tag_must_match_exactly() -> None:
-    recorder = Recorder(tags_router([{"name": "granite4.2:latest"}]))
+    recorder = Recorder(tags_router([{"name": "llama3.2:latest"}]))
 
     with pytest.raises(LLMModelNotFoundError):
         check_ollama(make_settings(), client=recorder.client())
 
 
 def test_check_ollama_missing_model() -> None:
-    recorder = Recorder(tags_router([{"name": "llama3.2:3b"}]))
+    recorder = Recorder(tags_router([{"name": "granite4.2:3b"}]))
 
-    with pytest.raises(LLMModelNotFoundError, match=r"run: ollama pull granite4\.2:3b"):
+    with pytest.raises(LLMModelNotFoundError, match=r"run: ollama pull llama3\.2:3b"):
         check_ollama(make_settings(), client=recorder.client())
 
 
@@ -547,7 +621,7 @@ def test_check_ollama_missing_version_raises_response_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/version":
             return httpx.Response(200, json={})
-        return httpx.Response(200, json={"models": [{"name": "granite4.2:3b"}]})
+        return httpx.Response(200, json={"models": [{"name": "llama3.2:3b"}]})
 
     with pytest.raises(LLMResponseError, match="no 'version'"):
         check_ollama(make_settings(), client=Recorder(handler).client())

@@ -37,6 +37,8 @@ _MESSAGE_KEYS: frozenset[str] = frozenset({"role", "content"})
 #: Longest Ollama error text copied into an exception message.
 _MAX_ERROR_DETAIL = 200
 _NS_PER_SECOND = 1_000_000_000
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
 
 
 class LLMError(Exception):
@@ -75,6 +77,8 @@ class LLMResponse:
         eval_seconds: Generation time.
         total_seconds: Total time measured by Ollama.
         truncated: True if the answer was cut (``done_reason == "length"``).
+        thinking_leaked: True if reasoning tags were found in the content and
+            removed (see :func:`strip_leaked_thinking`).
     """
 
     text: str
@@ -87,6 +91,24 @@ class LLMResponse:
     eval_seconds: float
     total_seconds: float
     truncated: bool
+    thinking_leaked: bool
+
+
+def strip_leaked_thinking(content: str) -> tuple[str, bool]:
+    """Remove reasoning a model wrote into the answer; return ``(text, leaked)``.
+
+    Some templates (e.g. ``granite4.2:3b``) open ``<think>`` in the prompt even
+    with ``think: false``, so the content holds the reasoning and a bare
+    ``</think>`` before the real answer. With ``</think>`` present only the
+    text after the LAST one is kept (stripped); with ``<think>`` but no
+    ``</think>`` everything is reasoning and the text is ``""``; without
+    either tag the content is returned unchanged.
+    """
+    if _THINK_CLOSE in content:
+        return content.rsplit(_THINK_CLOSE, 1)[1].strip(), True
+    if _THINK_OPEN in content:
+        return "", True
+    return content, False
 
 
 def validate_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
@@ -129,6 +151,7 @@ def build_chat_payload(messages: list[dict[str, str]], settings: Settings) -> di
         "options": {
             "temperature": settings.llm_temperature,
             "num_ctx": settings.llm_num_ctx,
+            "num_predict": settings.llm_max_answer_tokens,
         },
     }
 
@@ -260,8 +283,17 @@ def parse_chat_response(data: Mapping[str, Any]) -> LLMResponse:
             len(str(thinking)),
         )
 
+    answer, leaked = strip_leaked_thinking(text)
+    if leaked:
+        logger.warning(
+            "Reasoning leaked into the answer content (%d chars); kept the %d chars "
+            "after the last </think> (empty if the reasoning was never closed)",
+            len(text),
+            len(answer),
+        )
+
     result = LLMResponse(
-        text=text,
+        text=answer,
         model=model,
         done_reason=done_reason,
         prompt_tokens=_count(data, "prompt_eval_count"),
@@ -271,6 +303,7 @@ def parse_chat_response(data: Mapping[str, Any]) -> LLMResponse:
         eval_seconds=_seconds(data, "eval_duration"),
         total_seconds=_seconds(data, "total_duration"),
         truncated=done_reason == "length",
+        thinking_leaked=leaked,
     )
     if result.truncated:
         logger.warning(
