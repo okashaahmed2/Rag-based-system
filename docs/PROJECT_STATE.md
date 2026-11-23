@@ -31,8 +31,16 @@
   (2026-11-23), see Key decisions
 - Phase 6 Step 3 (3a results committed, 3b skipped, compare_eval labels): COMPLETE
 - Phase 6 (retrieval with done-filter, golden set, isolated eval store, baseline and
-  chunk-size comparison): COMPLETE (commit hash added in the next docs change)
-- Next: Phase 7 Step 0 (see Next precise task)
+  chunk-size comparison): COMPLETE (commit f1052c3)
+- Phase 7 Step 0 (read-only audit) and Ollama install on D:: COMPLETE
+- Phase 7 Step 1 (granite4.2:3b measurement): COMPLETE
+- Phase 7 Step 2 (llm.py client + LLM settings, default 127.0.0.1): COMPLETE
+  (commit 79db4b0)
+- Phase 7 Step 3a (prompt builder + answer checker): COMPLETE (commit 6566a45)
+- Phase 7 Step 3b (answer_question, model-proof answers, default
+  llama3.2:3b): COMPLETE (commit ff40009)
+- Phase 7 (local LLM, prompt with citations, NOT_FOUND behaviour): COMPLETE
+- Next: Phase 8 Step 0 (see Next precise task)
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -313,6 +321,29 @@
   full, untruncated config names (tests); the real 3-file comparison re-run gives the
   same numbers and the result files' SHA-256 hashes are unchanged
 - 724 pytest tests passing
+- Ollama 0.40.17 on D:\Ollama\app, models in D:\Ollama\models (user
+  OLLAMA_MODELS), nothing on C:; llama3.2:3b and granite4.2:3b pulled
+- granite4.2:3b: loaded 2.7 GB, 100% CPU, context 4096 default; prompt eval
+  ~118 tok/s, generation 15-17 tok/s; RAG prompts with think:false leak
+  reasoning ending in "</think>" (template enable_thinking defaults True)
+- localhost vs 127.0.0.1: wall - Ollama total = 2.20 s vs 0.15 s (3+3 runs);
+  DNS order ::1 then 127.0.0.1; Ollama listens on 127.0.0.1:11434 only
+- llm.py (MockTransport tests): exact request body; ns -> s; thinking field
+  dropped; "</think>" strip (one/two blocks, unclosed "<think>" -> "");
+  done_reason length -> truncated; error mapping; no prompt/answer text in logs
+- answering.py (pure + fake retrieve/chat tests): message structure, S
+  numbering, tag neutralisation, every check_answer branch incl. NOT_FOUND
+  line rule; no chunks -> chat never called; [S#] -> file/page mapping
+- Golden set, llama3.2:3b, top_k 5, rule 5 "1 to 3 short sentences":
+  10/13 answerable ANSWERED with citation hit, negatives 2/2 NOT_FOUND,
+  0 errors, 0 thinking leaks, 0 truncated, median wall 7.5-7.9 s, max prompt
+  1330 tokens; identical answers on re-run (temperature 0)
+- Mentor review of that run: 10/13 fully correct (granite after "</think>"
+  also 10/13, with 2 timeouts); misses q01, q03 (NOT_FOUND) and q12 (wrong
+  citation p.20)
+- A query-only run changes the eval store's Chroma file bytes; status.db and
+  manifest.json unchanged; retrieval results reproduced exactly
+- 948 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -340,6 +371,13 @@
   tests use tmp stores and a stub model only; no real evaluation run yet (Step 2)
 - scripts/list_doc_ids.py on the real PDFs (tests only)
 - $in filter speed / limits with many done doc_ids (probe had 3 documents)
+- Real Ollama 404 (model missing), timeout and server-down paths (mock tests only)
+- Whether q03's answer chunk (LACE p.2 "Pipeline" paragraph) was among the
+  retrieved chunks (page-level check only)
+- Faithfulness of answers (cited source supports the claim): not measured
+  automatically; manual review only
+- llama3.2:3b on documents or questions beyond the 15-question golden set
+- n8n -> FastAPI latency with "localhost" (Phase 9)
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -401,6 +439,23 @@
   query (temp Chroma + SQLite, never data/chroma or data/status.db; no file moves)
 - scripts/inbox_smoke.py: real ingest_inbox run (3 times) on a COPY of data/inbox in a
   temp dir, plus query; proves data/inbox unchanged
+- src/rag_pipeline/llm.py: chat, check_ollama, build_chat_payload,
+  parse_chat_response, strip_leaked_thinking, validate_messages, LLMResponse,
+  LLMError, LLMUnavailableError, LLMModelNotFoundError, LLMTimeoutError,
+  LLMResponseError
+- src/rag_pipeline/answering.py: SYSTEM_PROMPT, NOT_FOUND_SENTINEL,
+  NOT_FOUND_MESSAGE, build_rag_messages, build_user_message,
+  neutralize_source_tags, find_citations, is_not_found, check_answer,
+  AnswerStatus, CheckedAnswer, Citation, RagAnswer, sources_from_chunks,
+  answer_question
+- src/rag_pipeline/config.py also holds ollama_base_url, llm_model,
+  llm_temperature, llm_num_ctx, llm_timeout_seconds, llm_max_answer_tokens,
+  query_top_k
+- scripts/llm_smoke.py: manual check_ollama + one chat (real Ollama)
+- scripts/rag_smoke.py: manual golden-set RAG run on the eval store read path
+  (sources with *EXPECTED*, LLM miss vs retrieval miss; no result file)
+- scripts/llm_think_probe.py: diagnosis record of the granite thinking leak
+- tests/test_llm.py, tests/test_answering.py, tests/test_answer_question.py
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -563,6 +618,27 @@
   every measured chunk <= 256 tokens). scripts/compare_eval.py checks it mechanically
 - run_eval.py dirty flag: any modified/staged/untracked file means dirty, except
   UNTRACKED files under eval/results/ (earlier result files)
+- Ollama HTTP via httpx (declared), not the ollama Python package
+- Default base URL http://127.0.0.1:11434 (measured ~2.2 s per connection
+  with localhost on this machine); localhost still accepted
+- Every chat sends stream false, think false, temperature 0, num_ctx 4096,
+  num_predict 256 (single source: build_chat_payload)
+- think:false is not trusted: leaked reasoning up to the last "</think>" is
+  stripped and flagged in the client (model-proof)
+- Citation format [S#], sentinel NOT_FOUND (exact word, also as its own line;
+  a NOT_FOUND line wins over citations); user-facing text
+  "The answer was not found in the documents."
+- No retrieved chunks -> NOT_FOUND without calling the LLM
+- No similarity threshold before the LLM yet (negatives 0.22-0.25 vs lowest
+  answerable 0.36 on 15 questions only; not validated)
+- Prompt rule 5 "1 to 3 short sentences; add nothing not in the sources"
+  (longer answers padded with unsupported claims)
+- Default model llama3.2:3b BY JUDGMENT: pre-registered rule (0 errors,
+  negatives 2/2, >= 11/13 ANSWERED+hit, median <= 15 s) FAILED condition 3
+  (10/13); granite4.2:3b failed conditions 1 and 4. Model change -> rerun
+  llm_smoke + rag_smoke + manual answer review
+- Lesson: condition 3 counts an honest NOT_FOUND like a hallucination;
+  Phase 11 metrics must separate correct / abstained / wrong
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -571,6 +647,10 @@
   hit@1 0.600, hit@5 1.000, MRR@10 0.750; 5 questions from one document). Revisit if
   Roman Urdu documents grow, users ask in Roman Urdu, or the roman_urdu tag drops in a
   later eval run (Step 3b skipped, see Key decisions)
+- Table-aware extraction (q01): keep table rows/columns through cleaning?
+  (Phase 13 candidate)
+- Automatic citation check (key terms/numbers of the answer present in the
+  cited chunk, or an NLI model): Phase 11 candidate
 
 ## Verified versions
 Python 3.11.9 | pip 26.3 | setuptools 84.2.1 (upgraded from 65.5.0 by the
@@ -579,10 +659,11 @@ pydantic 2.14.3 | pytest 9.2.0 | pymupdf 2.1 | numpy 2.4.6 (declared dependency
 since Phase 4 Step 2b) | onnxruntime 1.31.1 |
 sentence-transformers 6.3.0 | torch 2.15.0+cpu | transformers 5.23.0 |
 tokenizers 0.23.3 | huggingface-hub 2.4.0 | chromadb 1.5.9 |
-git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2
+git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2 | httpx 0.28.1 | Ollama 0.40.17 | llama3.2:3b | granite4.2:3b (rejected)
 
 ## Hardware (verified)
-Intel Core i5-14400F (10C/16T), 15.8 GB RAM (6.6 GB free at check),
+Intel Core i5-14400F (10C/16T), 15.8 GB RAM (2 x 8 GB DDR4-3200, dual channel; 5.99-6.82 GB free with
+Chrome + VS Code open),
 AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 
 ## Risks
@@ -662,7 +743,24 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - measure_chunk_tokens.py loads SentenceTransformer without local_files_only (needs
   HF_HUB_OFFLINE=1 to guarantee no Hub contact) and writes logs/token_report.txt,
   overwritten per run
+- llama3.2:3b can cite a retrieved source that does not hold the claim (q12);
+  check_answer cannot detect it
+- Tables are flattened by cleaning (one value per line), so table questions
+  can fail at generation (q01)
+- Chroma rewrites its files on a query-only open/close: eval stores are not
+  byte-identical across runs (run evals on a copy in Phase 11)
+- Uvicorn also binds 127.0.0.1 by default: n8n calling "localhost" may pay
+  the same IPv6 fallback delay (measure in Phase 9)
+- A 404 from /api/chat is always reported as "model not found" (a wrong base
+  URL also gives 404)
+- llm.chat opens a new HTTP connection per call (~0.15 s); Phase 8 can reuse
+  one client
+- Cold model load 2-35 s after Ollama unloads the model (keep_alive ~5 min)
+- llama3.2:3b license: Llama 3.2 Community License ("Built with Llama" in the
+  README, Phase 14)
 
 ## Next precise task
-Phase 7 Step 0 — READ-ONLY check: is Ollama installed (version), free RAM, disk
-space. No installs or downloads.
+Phase 8 Step 0 — FastAPI basics + READ-ONLY check: fastapi / uvicorn /
+pydantic versions in the venv (uvicorn 0.54.0 is present via chromadb),
+port 8000 free, and a plan for /ingest/scan, /status/{job_id}, /query
+(job table, BackgroundTasks, one shared httpx client). No installs.

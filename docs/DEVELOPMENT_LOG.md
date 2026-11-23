@@ -265,3 +265,62 @@
   prefixes; keep all-MiniLM-L6-v2 with revisit triggers. compare_eval labels fixed
   (chunk part for a shared model, full names otherwise; 3 tests). Chunk settings stay
   600/120. 724 tests passing. Phase 6 complete.
+
+## 2026-11-23 — Phase 7
+- Step 0 (read-only): Ollama not installed; 15.8 GB RAM (5.99 GB free with
+  Chrome + VS Code open), 2 x 8 GB DDR4-3200 on two controllers (dual
+  channel), i5-14400F 6P+4E/16T; D: 388 GB free, C: 69 GB free; httpx 0.28.1
+  present via chromadb; Phase 6 commit f1052c3.
+- Ollama 0.40.17 installed by the user on D: (OllamaSetup.exe
+  /DIR="D:\Ollama\app"; user variable OLLAMA_MODELS=D:\Ollama\models set
+  before install); granite4.2:3b pulled (2.09 GB on D:, nothing on C:).
+  The user's terminal was cmd, not PowerShell.
+- Step 1 (measurement only): granite4.2:3b 3.7B Q4_K_M, loaded 2.7 GB,
+  100% CPU, context 4096 by default; prompt eval ~118 tok/s (748 tokens ->
+  6.3 s), generation 15-17 tok/s, cold load 2.6 s; an identical prompt was
+  served from Ollama's cache. Without "think" the reasoning appeared inside
+  "response"; "think": false removed it on short prompts.
+- Step 2: llm.py (httpx client: chat, check_ollama, LLMError family;
+  stream false, think false, temperature + num_ctx from settings), 5 LLM
+  settings, httpx>=0.28,<1 declared (no package changed). 86 MockTransport
+  tests, 810 passing.
+- Found: "localhost" resolves to ::1 first and Ollama listens on 127.0.0.1
+  only -> ~2.2 s extra per new connection (3 + 3 runs: 2.20 s vs 0.15 s).
+  Default changed to http://127.0.0.1:11434. Commit 79db4b0 (811 tests).
+- Step 3a: answering.py: fixed SYSTEM_PROMPT, build_rag_messages
+  (<source id="S1" file=".." page=".."> blocks, tag neutralisation, quotes in
+  filenames escaped), check_answer (ANSWERED / NOT_FOUND / NO_CITATIONS /
+  BAD_CITATIONS / EMPTY). [S#] chosen because the LACE paper contains its own
+  "[12]" references. 68 tests, 879 passing. Commit 6566a45.
+- Step 3b: answer_question (retrieve -> no chunks: NOT_FOUND without the LLM
+  -> messages -> chat -> check -> [S#] mapped to doc_id/file/page),
+  RAG_QUERY_TOP_K=5, scripts/rag_smoke.py (golden set, eval store read path).
+- First golden run (granite): q01 and q12 timed out at 120 s; reasoning leaked
+  into content ending with "</think>" despite think:false (q13: 1593 tokens,
+  109 s); the format check passed the leaked text because it contained [S#];
+  negatives explained first and ended with a NOT_FOUND line -> NO_CITATIONS;
+  q03 cited all 5 sources in a non-answer (citation_hit misleading).
+- Diagnosis (scripts/llm_think_probe.py, 3 questions x 4 variants): granite's
+  template defaults enable_thinking=True and ends the prompt with "<think>";
+  think:false only turns off Ollama's parser, so reasoning lands in content
+  (732-848 tokens). Without "think" the reasoning goes to message.thinking but
+  is still generated (q02 used all 2048 tokens, empty answer). llama3.2:3b:
+  3-38 tokens, ~2 s generation, correct statuses, accepts think:false.
+- Fixes: "</think>" strip in llm.py (thinking_leaked flag), NOT_FOUND line
+  rule, RAG_LLM_MAX_ANSWER_TOKENS=256 (num_predict), flushed script output.
+- llama3.2:3b with "at most 5 sentences": rule conditions 1-4 passed (11/13),
+  but review found padding errors (q04 "4-6 times faster" = embedding calls,
+  q10 "fit more tightly", q03 invented embedding model).
+- Rule 5 changed to "1 to 3 short sentences. Do not add anything that is not
+  stated in the sources.": padding errors gone, q03 became NOT_FOUND;
+  10/13 ANSWERED with citation hit (condition 3 FAIL), 0 errors, negatives
+  2/2, median 7.9 s; identical answers on re-run (temperature 0). All misses
+  had an expected page retrieved: q01 (Table 1 flattened by cleaning),
+  q03 (answer chunk possibly not retrieved; unverified), q12 (cites p.20,
+  which has no K-Means++; expected pp. 34/36 were retrieved).
+- Found: a query-only run changes the bytes of the eval store's Chroma files
+  (chroma.sqlite3, data_level0.bin, length.bin); status.db and manifest.json
+  unchanged.
+- Decision: default llama3.2:3b by mentor judgment (pre-registered rule
+  failed on condition 3; granite failed conditions 1 and 4). Commit ff40009.
+  948 tests passing. Phase 7 complete.

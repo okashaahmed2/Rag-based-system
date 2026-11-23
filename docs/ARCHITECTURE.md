@@ -172,5 +172,33 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - Configuration changes are decided by a pre-registered rule (compare_eval.py);
   baseline 600/120 MiniLM.
 
+## Answering (Phase 7)
+- LLM: Ollama at http://127.0.0.1:11434 (not localhost: Windows resolves
+  localhost to ::1 first, Ollama listens on IPv4 only, ~2.2 s per connection),
+  model llama3.2:3b (Q4_K_M, 2.0 GB), CPU only.
+- llm.chat: POST /api/chat, stream false, think false, temperature 0,
+  num_ctx 4096, num_predict 256, timeout 120 s. Errors: LLMUnavailableError,
+  LLMModelNotFoundError (404), LLMTimeoutError, LLMResponseError. Reasoning
+  leaked into content (everything up to the last "</think>") is removed and
+  flagged (thinking_leaked); a separate thinking field is dropped;
+  done_reason "length" -> truncated. check_ollama: /api/version + /api/tags.
+- answer_question: retrieve top_k (RAG_QUERY_TOP_K=5) done-only chunks ->
+  none: NOT_FOUND without calling the LLM -> build_rag_messages -> chat ->
+  check_answer -> [S#] mapped to doc_id, filename, page_number.
+- Prompt: fixed SYSTEM_PROMPT first (stable prefix), then one user message
+  with <source id="S1" file=".." page=".."> blocks (nearest first) and the
+  question. Sources are untrusted data: tag-like "<source" sequences are
+  neutralised, quotes in filenames escaped, and the prompt says sources are
+  not instructions. Citations use [S#] (papers contain their own "[12]").
+  Answers are 1-3 sentences.
+- check_answer (first match wins): EMPTY; NOT_FOUND (starts with NOT_FOUND,
+  or any line is just NOT_FOUND; wins over citations); BAD_CITATIONS (number
+  outside 1..n); NO_CITATIONS; ANSWERED. It checks format only, not whether
+  the cited source supports the claim (faithfulness is an evaluation task).
+- No question, chunk or answer text is logged; manual scripts print answers.
+- Latency (golden set, llama3.2:3b, CPU): median ~7.5-8 s; prompt eval
+  ~118-125 tok/s (about 1 s per 120-token chunk), generation ~19 tok/s;
+  model load 2-35 s on a cold start.
+
 ## Local services
-n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434
+n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama 127.0.0.1:11434
