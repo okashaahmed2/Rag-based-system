@@ -241,3 +241,4 @@
   SVM-notes hits (doc_id -> filename map from the corpus list, last copy won); the
   JSON (Chroma metadata) was correct. Fixed: summary uses the hit's filename, falling
   back to the first corpus file; regression test added.
+- Step 2 committed 8bcba2b; baseline regenerated clean (dirty=false).

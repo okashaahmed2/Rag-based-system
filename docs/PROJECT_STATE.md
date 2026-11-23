@@ -24,7 +24,7 @@
   evaluation run): COMPLETE (commit 8a641b4)
 - Phase 6 Step 2 prep (verified golden set, 15 questions): COMPLETE (commit e835fe9)
 - Phase 6 Step 2 (isolated eval store + evaluation runner + first baseline run at
-  600/120 MiniLM): COMPLETE (not committed)
+  600/120 MiniLM): COMPLETE (commit 8bcba2b; baseline result regenerated clean)
 - Next: Phase 6 Step 3: compare configurations (e.g. 800/120, another model)
 
 ## Verified (with evidence)
@@ -599,8 +599,9 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   changing it requires a new store (manifest refuses a changed corpus)
 - Each eval run retries the invalid and password PDFs until they reach
   max_ingest_attempts (3), then they are skipped (ingestion behaviour, unchanged)
-- The baseline result was produced from an uncommitted working tree (git dirty =
-  true, commit e835fe9 recorded)
+- run_eval.py's dirty flag counts untracked files too (git status --porcelain), so an
+  untracked result file from an earlier run marks the next run dirty; the clean
+  baseline was regenerated with the old file moved aside (commit 8bcba2b, dirty false)
 
 ## Next precise task
 Phase 6 Step 3 — configuration comparison (no LLM): run scripts/run_eval.py for other
