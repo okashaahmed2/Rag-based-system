@@ -25,7 +25,14 @@
 - Phase 6 Step 2 prep (verified golden set, 15 questions): COMPLETE (commit e835fe9)
 - Phase 6 Step 2 (isolated eval store + evaluation runner + first baseline run at
   600/120 MiniLM): COMPLETE (commit 8bcba2b; baseline result regenerated clean)
-- Next: Phase 6 Step 3: compare configurations (e.g. 800/120, another model)
+- Phase 6 Step 3a (dirty-flag fix + compare_eval): COMPLETE (commit 6d8a536); chunk-size
+  comparison 400/80 and 800/120, rule outcome: keep 600/120
+- Phase 6 Step 3b (multilingual embedding model comparison): SKIPPED by user decision
+  (2026-11-23), see Key decisions
+- Phase 6 Step 3 (3a results committed, 3b skipped, compare_eval labels): COMPLETE
+- Phase 6 (retrieval with done-filter, golden set, isolated eval store, baseline and
+  chunk-size comparison): COMPLETE (commit hash added in the next docs change)
+- Next: Phase 7 Step 0 (see Next precise task)
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -273,7 +280,39 @@
   (attempt 2) and failed at extraction (no embedding)
 - data/inbox names/sizes/mtimes identical before and after both runs; data/chroma
   and data/status.db not created; results file contains 0 of 15 question texts
-- 691 pytest tests passing
+- run_eval dirty flag (Step 3a): untracked eval/results/ file -> clean; untracked file
+  elsewhere -> dirty; modified tracked file (incl. a tracked result file) -> dirty
+  (tmp git repo tests). Real: the 800/120 run started with the untracked 400_80
+  result present and recorded dirty false
+- compare_eval.py: deltas, better/worse/same, OUT-TOP5 flags, similarity, rule check;
+  different question ids/order, answerable flags or ks refused with exit 2 (tests)
+- Token reports on the eval corpus (measure_chunk_tokens.py with RAG_INBOX_DIR /
+  RAG_CHUNK_SIZE / RAG_CHUNK_OVERLAP env overrides, HF_HUB_OFFLINE=1; overall counts
+  include the duplicate SVM copy, as the 600/120 figures did):
+  400/80: 183 chunks, median 84, p95 143, max 167, 0 over 256, 13 over 128;
+  800/120: 110 chunks, median 122, p95 214, max 298, 2 over 256 (LACE chunks 9 and 13,
+  280 and 298 tokens, truncated at embedding), 51 over 128 (= Phase 4 figures);
+  600/120 (Phase 4): 129 chunks, median 116, p95 177, max 241, 0 over 256, 48 over 128
+- Step 3a runs (commit 6d8a536, dirty false, own stores all-minilm-l6-v2_400_80 and
+  _800_120, each ingest done 4 / failed 2 / needs_ocr 1 / skipped 1):
+  400/80: hit@1 0.615, hit@3 0.846, hit@5 1.000, hit@10 1.000, MRR@10 0.753 (-0.042);
+  800/120: hit@1 0.615, hit@3 0.769, hit@5 1.000, hit@10 1.000, MRR@10 0.746 (-0.049)
+  vs baseline 600/120 0.692 / 0.846 / 1.000 / 1.000 / 0.795
+- Rank changes vs 600/120: 400/80 worse q01 3->4, q03 1->3, q06 4->5, better q10 4->2;
+  800/120 worse q01 3->4, q03 1->2, q10 4->5; all other questions same; no answerable
+  question outside the top 5 in any config
+- Per tag (MRR@10, 600 / 400 / 800): fact 0.600 / 0.507 / 0.490; roman_urdu 0.750 /
+  0.800 / 0.740; table 0.667 / 0.625 / 0.625; comparison and definition 1.000 in all
+- Negatives top-1: 400/80 q14 0.289, q15 0.231 (higher than 600/120's 0.253 / 0.218);
+  800/120 equal to 600/120. Lowest answerable top-1: 0.415 at 400/80, 0.363 otherwise
+- DECISION RULE OUTCOME (mechanical, compare_eval): 400/80 FAIL (MRR -0.042),
+  800/120 FAIL (MRR -0.049); hit@5 and the top-5 condition held for both ->
+  600/120 stays; Settings defaults unchanged
+- compare_eval.py labels: runs sharing a model show the chunk part ("600_120",
+  "400_80", "800_120") plus a "(all runs use model ...)" note; different models show
+  full, untruncated config names (tests); the real 3-file comparison re-run gives the
+  same numbers and the result files' SHA-256 hashes are unchanged
+- 724 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -282,7 +321,8 @@
 - OCR itself (Phase 13)
 - Ligatures and invisible-character rules on real PDF data (no real PDF contained
   any yet; unit tests only)
-- Retrieval quality at 600 vs 800 (Phase 6 Step 3; 600/120 baseline measured)
+- Whether the 400/80 and 800/120 MRR differences are more than noise (13 answerable
+  questions; a one-rank move on one question changes MRR by up to 0.04)
 - Denser PDFs may exceed 256 tokens at 600 chars (worst ~2.4 chars/token seen)
 - HF model download on a fresh machine / behind a proxy
 - Over-limit WARNING on real data (stub only; no real chunk > 256)
@@ -507,6 +547,16 @@
   data/eval/ is ignored
 - A same-day re-run overwrites the result file and reports whether the results are
   identical to the previous file
+- Chunk settings stay 600/120 (Step 3a rule outcome: 400/80 and 800/120 both failed
+  the MRR condition; the differences are within noise for 13 answerable questions,
+  and 600 keeps every measured chunk <= 256 tokens)
+- Step 3b (multilingual embedding model) SKIPPED by user decision (2026-11-23).
+  Reasons: the roman_urdu tag is not worse than overall at baseline (hit@5 1.000,
+  MRR@10 0.750 vs 0.795); questions are asked in English and the notes keep technical
+  terms in English; paraphrase-multilingual-MiniLM-L12-v2 has max_seq_length 128
+  (truncation risk at 600 chars); multilingual-e5-small needs "query: " / "passage: "
+  prefixes (a code change). Revisit if Roman Urdu documents grow, users ask in Roman
+  Urdu, or the roman_urdu tag drops in a later eval run
 - PRE-REGISTERED DECISION RULE (recorded 2026-11-23, before any Step 3 run): 600/120
   is replaced only if a config keeps hit@5 = 1.000, improves MRR@10 by >= 0.05, and
   drops no answerable question out of the top 5. Otherwise 600/120 stays (it keeps
@@ -517,9 +567,10 @@
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
   research papers (decided).
-- Roman Urdu notes (all-MiniLM-L6-v2 vs a multilingual model): baseline roman_urdu
-  hit@1 0.600, hit@5 1.000, MRR@10 0.750 (5 questions, all from one document, so not
-  a language verdict); decision pending Step 3
+- Roman Urdu notes: RESOLVED (2026-11-23) — keep all-MiniLM-L6-v2 (baseline roman_urdu
+  hit@1 0.600, hit@5 1.000, MRR@10 0.750; 5 questions from one document). Revisit if
+  Roman Urdu documents grow, users ask in Roman Urdu, or the roman_urdu tag drops in a
+  later eval run (Step 3b skipped, see Key decisions)
 
 ## Verified versions
 Python 3.11.9 | pip 26.3 | setuptools 84.2.1 (upgraded from 65.5.0 by the
@@ -608,10 +659,10 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
   max_ingest_attempts (3), then they are skipped (ingestion behaviour, unchanged)
 - The baseline result (commit 8bcba2b) was regenerated clean with the old untracked
   result file moved aside; fixed in Step 3a (untracked eval/results/ files ignored)
+- measure_chunk_tokens.py loads SentenceTransformer without local_files_only (needs
+  HF_HUB_OFFLINE=1 to guarantee no Hub contact) and writes logs/token_report.txt,
+  overwritten per run
 
 ## Next precise task
-Phase 6 Step 3 — configuration comparison (no LLM): run scripts/run_eval.py for other
-configurations (e.g. --chunk-size 800 --chunk-overlap 120, possibly another model)
-into their own eval stores and compare with the 600/120 MiniLM baseline
-(eval/results/2026-11-23_all-minilm-l6-v2_600_120.json), focusing on hit@1, hit@3
-and MRR@10.
+Phase 7 Step 0 — READ-ONLY check: is Ollama installed (version), free RAM, disk
+space. No installs or downloads.

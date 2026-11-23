@@ -154,9 +154,67 @@ def test_three_files_compare_against_base(
     code, out, _ = run_main(capsys, base, a, b)
 
     assert code == 0
-    assert "OTHER cfg_a: a.json" in out and "OTHER cfg_b: b.json" in out
+    assert "OTHER [cfg_a] cfg_a: a.json" in out and "OTHER [cfg_b] cfg_b: b.json" in out
     assert "cfg_a vs minilm_600_120: PASS (replace base)" in out
     assert "cfg_b vs minilm_600_120: FAIL (keep base)" in out
+
+
+# --- column labels -------------------------------------------------------------------------------
+
+
+def test_same_model_prefix_columns_show_the_chunk_part(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ranks = {"q1": 1, "q2": 3, "q3": 2}
+    paths = [
+        write_result(tmp_path / f"{c}.json", f"all-minilm-l6-v2_{c}", ranks)
+        for c in ("600_120", "400_80", "800_120")
+    ]
+
+    _, out, _ = run_main(capsys, *paths)
+
+    lines = out.splitlines()
+    metric_header = next(l for l in lines if l.startswith("group / metric"))
+    assert metric_header.split()[-3:] == ["600_120", "400_80", "800_120"]
+    rank_header = next(l for l in lines if l.startswith("id "))
+    assert rank_header.split() == ["id", "600_120", "400_80", "800_120"]
+    assert "BASE  [600_120] all-minilm-l6-v2_600_120: 600_120.json" in out
+    assert "OTHER [800_120] all-minilm-l6-v2_800_120: 800_120.json" in out
+    assert "(all runs use model all-minilm-l6-v2; columns show chunk_size_overlap)" in out
+    assert "all-minilm-l6-v2_6 " not in out  # no truncated label anywhere
+
+
+def test_different_models_keep_full_untruncated_labels(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ranks = {"q1": 1, "q2": 3, "q3": 2}
+    a = write_result(tmp_path / "a.json", "all-minilm-l6-v2_600_120", ranks)
+    b = write_result(tmp_path / "b.json", "paraphrase-multilingual-minilm-l12-v2_600_120", ranks)
+
+    _, out, _ = run_main(capsys, a, b)
+
+    metric_header = next(l for l in out.splitlines() if l.startswith("group / metric"))
+    assert metric_header.split()[-2:] == [
+        "all-minilm-l6-v2_600_120",
+        "paraphrase-multilingual-minilm-l12-v2_600_120",
+    ]
+    assert "columns show chunk_size_overlap" not in out
+    hit1 = next(l for l in out.splitlines() if l.strip().startswith("hit@1"))
+    assert len(hit1) <= len(metric_header)  # values stay inside their columns
+
+
+def test_column_labels_unit() -> None:
+    def run(label: str) -> Any:
+        return compare_eval.EvalRun(Path(f"{label}.json"), label, {"results": {}})
+
+    same = [run("m_600_120"), run("m_400_80")]
+    mixed = [run("m_600_120"), run("other_600_120")]
+    odd = [run("m_600_120"), run("custom")]
+
+    assert compare_eval.column_labels(same) == ["600_120", "400_80"]
+    assert compare_eval.column_labels(mixed) == ["m_600_120", "other_600_120"]
+    assert compare_eval.column_labels(odd) == ["m_600_120", "custom"]
+    assert compare_eval.column_labels([run("m_600_120")]) == ["m_600_120"]
 
 
 # --- refusal ---------------------------------------------------------------------------------

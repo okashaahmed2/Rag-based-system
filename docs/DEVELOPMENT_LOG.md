@@ -247,4 +247,21 @@
   the top 5). run_eval dirty flag now ignores only untracked eval/results/ files
   (git status --porcelain=v1 -z --untracked-files=all; tested on a tmp git repo).
   scripts/compare_eval.py (metrics + deltas, rank changes, outside-top-5 flags,
-  similarity, rule check; refuses different golden sets / ks).
+  similarity, rule check; refuses different golden sets / ks). 721 tests passing.
+  Committed 6d8a536 and pushed.
+- Step 3a runs from the clean tree (commit 6d8a536, dirty false): token reports on the
+  eval corpus 400/80 max 167 (0 over 256), 800/120 max 298 (2 over 256, = Phase 4).
+  400/80: hit@1 0.615, hit@3 0.846, hit@5 1.000, MRR@10 0.753; 800/120: 0.615, 0.769,
+  1.000, MRR@10 0.746; baseline 600/120: 0.692, 0.846, 1.000, MRR@10 0.795. Rule: both
+  FAIL on MRR (-0.042 / -0.049) -> 600/120 stays. No question left the top 5.
+- Found: compare_eval column labels are cut to 18/22 characters, so same-prefix configs
+  read as "all-minilm-l6-v2_6/_4/_8" (cosmetic, not fixed). data/inbox unchanged,
+  data/chroma and data/status.db absent.
+- Step 3 close: 400/80 and 800/120 result files committed (unchanged, SHA-256 checked
+  before/after). Step 3b (multilingual model) skipped by user decision: roman_urdu not
+  worse than overall at baseline (MRR@10 0.750 vs 0.795, hit@5 1.000), English
+  questions with English technical terms in the notes, paraphrase-multilingual-
+  MiniLM-L12-v2 max_seq_length 128, multilingual-e5-small needs query/passage
+  prefixes; keep all-MiniLM-L6-v2 with revisit triggers. compare_eval labels fixed
+  (chunk part for a shared model, full names otherwise; 3 tests). Chunk settings stay
+  600/120. 724 tests passing. Phase 6 complete.

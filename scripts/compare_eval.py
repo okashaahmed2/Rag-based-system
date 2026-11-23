@@ -122,6 +122,31 @@ def _outside_guard(rank: int | None) -> bool:
     return rank is None or rank > TOP_K_GUARD
 
 
+#: Narrowest column: fits a value with its delta, e.g. "0.615 (-0.077)".
+MIN_COLUMN_WIDTH = 16
+
+
+def common_model(runs: Sequence[EvalRun]) -> str | None:
+    """The model slug all labels share, if every label is ``<slug>_<size>_<overlap>``."""
+    parts = [run.label.rsplit("_", 2) for run in runs]
+    if len(runs) < 2 or any(len(p) != 3 for p in parts):
+        return None
+    slugs = {p[0] for p in parts}
+    return slugs.pop() if len(slugs) == 1 else None
+
+
+def column_labels(runs: Sequence[EvalRun]) -> list[str]:
+    """Unambiguous column labels: the chunk part ("600_120") when all runs share a
+    model, else the full config names. Never truncated."""
+    if common_model(runs) is not None:
+        return ["_".join(run.label.rsplit("_", 2)[1:]) for run in runs]
+    return [run.label for run in runs]
+
+
+def _column_width(labels: Sequence[str]) -> int:
+    return max(MIN_COLUMN_WIDTH, *(len(label) for label in labels))
+
+
 def metric_lines(runs: Sequence[EvalRun]) -> list[str]:
     """Overall + per-tag table, one block per group, deltas vs the base."""
     base = runs[0]
@@ -129,8 +154,9 @@ def metric_lines(runs: Sequence[EvalRun]) -> list[str]:
     metrics = [(f"hit@{k}", ("hit_at", k)) for k in ks] + [
         (f"MRR@{base.results['mrr_k']}", (base.mrr_key, None))
     ]
-    width = 18
-    header = f"{'group / metric':<22}" + "".join(f"{run.label[:width]:>{width + 2}}" for run in runs)
+    labels = column_labels(runs)
+    width = _column_width(labels)
+    header = f"{'group / metric':<22}" + "".join(f"{label:>{width + 2}}" for label in labels)
     lines = [header, "-" * len(header)]
     groups = ["overall", *base.results["per_tag"].keys()]
     for group in groups:
@@ -166,13 +192,19 @@ def rank_lines(runs: Sequence[EvalRun]) -> list[str]:
     base = runs[0]
     base_ranks = base.ranks()
     answerable = base.answerable()
-    header = f"{'id':<6}{'base':>6}" + "".join(f"{run.label[:22]:>26}" for run in runs[1:])
+    labels = column_labels(runs)
+    # A cell holds e.g. "10 better  OUT-TOP5" (19 characters).
+    width = max(22, *(len(label) for label in labels[1:]))
+    header = f"{'id':<6}{labels[0]:>{max(6, len(labels[0]) + 2)}}" + "".join(
+        f"{label:>{width + 4}}" for label in labels[1:]
+    )
+    base_width = max(6, len(labels[0]) + 2)
     lines = [header, "-" * len(header)]
     flags: list[str] = []
     for qid in base.question_ids():
         if not answerable[qid]:
             continue
-        row = f"{qid:<6}{_rank(base_ranks[qid]):>6}"
+        row = f"{qid:<6}{_rank(base_ranks[qid]):>{base_width}}"
         for run in runs[1:]:
             rank = run.ranks()[qid]
             if _rank_key(rank) < _rank_key(base_ranks[qid]):
@@ -182,7 +214,7 @@ def rank_lines(runs: Sequence[EvalRun]) -> list[str]:
             else:
                 change = "same"
             mark = "  OUT-TOP5" if _outside_guard(rank) else ""
-            row += f"{_rank(rank) + ' ' + change + mark:>26}"
+            row += f"{_rank(rank) + ' ' + change + mark:>{width + 4}}"
             if _outside_guard(rank):
                 left = "" if _outside_guard(base_ranks[qid]) else " (in top 5 in base)"
                 flags.append(
@@ -240,12 +272,15 @@ def rule_check(base: EvalRun, other: EvalRun) -> tuple[bool, list[str]]:
 def render(runs: Sequence[EvalRun]) -> list[str]:
     """The full comparison report (ASCII)."""
     lines = ["Files:"]
-    for index, run in enumerate(runs):
+    for index, (run, label) in enumerate(zip(runs, column_labels(runs))):
         git = (run.payload.get("run") or {}).get("git") or {}
         lines.append(
-            f"  {'BASE ' if index == 0 else 'OTHER'} {run.label}: {run.path.name} "
+            f"  {'BASE ' if index == 0 else 'OTHER'} [{label}] {run.label}: {run.path.name} "
             f"(commit {str(git.get('commit'))[:10]}, dirty {git.get('dirty')})"
         )
+    model = common_model(runs)
+    if model is not None:
+        lines.append(f"  (all runs use model {model}; columns show chunk_size_overlap)")
     lines += ["", "Metrics (delta vs BASE):", *metric_lines(runs)]
     lines += ["", "Ranks of answerable questions (vs BASE):", *rank_lines(runs)]
     lines += ["", "Similarity:", *similarity_lines(runs)]

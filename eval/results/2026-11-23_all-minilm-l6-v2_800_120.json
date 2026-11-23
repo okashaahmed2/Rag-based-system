@@ -1,0 +1,827 @@
+{
+  "run": {
+    "date": "2026-11-23",
+    "git": {
+      "commit": "6d8a5369a32947143af56d1c47188c780a15a6a3",
+      "dirty": false
+    },
+    "golden_set": "eval/golden_set.jsonl"
+  },
+  "manifest": {
+    "config": "all-minilm-l6-v2_800_120",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "chunk_size": 800,
+    "chunk_overlap": 120,
+    "corpus": [
+      {
+        "filename": "LACE_research_paper_2col.pdf",
+        "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c"
+      },
+      {
+        "filename": "Lecture07_DecisionTrees.pdf",
+        "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e"
+      },
+      {
+        "filename": "not_a_pdf_test.pdf",
+        "doc_id": "37acea8bd0389ecbd2d01b8ec3a2f0e2b0b41cce7b2f3a284733d0cdbd12ae5e"
+      },
+      {
+        "filename": "partly_blank_test.pdf",
+        "doc_id": "0c091147571c260fb5a8728cb5aa7df46b3153671df1e4ba852a84901d8b6183"
+      },
+      {
+        "filename": "password_protected_test.pdf",
+        "doc_id": "4f933baa6b112fa0b580d1daae8db90394f33d426ad8ded6b2cc795cb6a044b4"
+      },
+      {
+        "filename": "scanned_notes_test.pdf",
+        "doc_id": "7cb8c2a7adec645a47dd8de0e5460b6d5d952095051d4b9922027b1f098e1110"
+      },
+      {
+        "filename": "SVM,K-mean,KNN.pdf",
+        "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b"
+      },
+      {
+        "filename": "svm_copy_renamed.pdf",
+        "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b"
+      }
+    ],
+    "embedding_dim": 384,
+    "created_at": "2026-11-23T09:32:22+00:00"
+  },
+  "ingest": [
+    {
+      "filename": "LACE_research_paper_2col.pdf",
+      "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+      "outcome": "done",
+      "chunk_count": 19,
+      "skip_reason": null
+    },
+    {
+      "filename": "Lecture07_DecisionTrees.pdf",
+      "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+      "outcome": "done",
+      "chunk_count": 15,
+      "skip_reason": null
+    },
+    {
+      "filename": "not_a_pdf_test.pdf",
+      "doc_id": "37acea8bd0389ecbd2d01b8ec3a2f0e2b0b41cce7b2f3a284733d0cdbd12ae5e",
+      "outcome": "failed",
+      "chunk_count": null,
+      "skip_reason": null
+    },
+    {
+      "filename": "partly_blank_test.pdf",
+      "doc_id": "0c091147571c260fb5a8728cb5aa7df46b3153671df1e4ba852a84901d8b6183",
+      "outcome": "done",
+      "chunk_count": 2,
+      "skip_reason": null
+    },
+    {
+      "filename": "password_protected_test.pdf",
+      "doc_id": "4f933baa6b112fa0b580d1daae8db90394f33d426ad8ded6b2cc795cb6a044b4",
+      "outcome": "failed",
+      "chunk_count": null,
+      "skip_reason": null
+    },
+    {
+      "filename": "scanned_notes_test.pdf",
+      "doc_id": "7cb8c2a7adec645a47dd8de0e5460b6d5d952095051d4b9922027b1f098e1110",
+      "outcome": "needs_ocr",
+      "chunk_count": 0,
+      "skip_reason": null
+    },
+    {
+      "filename": "SVM,K-mean,KNN.pdf",
+      "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+      "outcome": "done",
+      "chunk_count": 37,
+      "skip_reason": null
+    },
+    {
+      "filename": "svm_copy_renamed.pdf",
+      "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+      "outcome": "skipped",
+      "chunk_count": 37,
+      "skip_reason": "already ingested"
+    }
+  ],
+  "results": {
+    "ks": [
+      1,
+      3,
+      5,
+      10
+    ],
+    "mrr_k": 10,
+    "overall": {
+      "questions": 15,
+      "answerable": 13,
+      "hit_at": {
+        "1": 0.6153846153846154,
+        "3": 0.7692307692307693,
+        "5": 1.0,
+        "10": 1.0
+      },
+      "mrr_at_10": 0.7461538461538461
+    },
+    "per_tag": {
+      "comparison": {
+        "questions": 4,
+        "answerable": 4,
+        "hit_at": {
+          "1": 1.0,
+          "3": 1.0,
+          "5": 1.0,
+          "10": 1.0
+        },
+        "mrr_at_10": 1.0
+      },
+      "definition": {
+        "questions": 2,
+        "answerable": 2,
+        "hit_at": {
+          "1": 1.0,
+          "3": 1.0,
+          "5": 1.0,
+          "10": 1.0
+        },
+        "mrr_at_10": 1.0
+      },
+      "fact": {
+        "questions": 5,
+        "answerable": 5,
+        "hit_at": {
+          "1": 0.2,
+          "3": 0.6,
+          "5": 1.0,
+          "10": 1.0
+        },
+        "mrr_at_10": 0.49000000000000005
+      },
+      "negative": {
+        "questions": 2,
+        "answerable": 0,
+        "hit_at": null,
+        "mrr_at_10": null
+      },
+      "roman_urdu": {
+        "questions": 5,
+        "answerable": 5,
+        "hit_at": {
+          "1": 0.6,
+          "3": 0.8,
+          "5": 1.0,
+          "10": 1.0
+        },
+        "mrr_at_10": 0.74
+      },
+      "table": {
+        "questions": 2,
+        "answerable": 2,
+        "hit_at": {
+          "1": 0.5,
+          "3": 0.5,
+          "5": 1.0,
+          "10": 1.0
+        },
+        "mrr_at_10": 0.625
+      }
+    },
+    "similarity": {
+      "answerable_top1": {
+        "min": 0.36274051666259766,
+        "median": 0.6508433818817139,
+        "max": 0.7810924053192139,
+        "without_results": 0
+      },
+      "negative_top1": {
+        "q14": 0.2528756856918335,
+        "q15": 0.21761834621429443
+      }
+    },
+    "questions": [
+      {
+        "id": "q01",
+        "tags": [
+          "table"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 4,
+        "top1_similarity": 0.41575169563293457,
+        "top": [
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 1,
+            "similarity": 0.41575169563293457
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.4064297676086426
+          },
+          {
+            "doc_id": "0c091147571c260fb5a8728cb5aa7df46b3153671df1e4ba852a84901d8b6183",
+            "filename": "partly_blank_test.pdf",
+            "page": 1,
+            "similarity": 0.37900471687316895
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.35088950395584106
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 1,
+            "similarity": 0.3388921022415161
+          }
+        ]
+      },
+      {
+        "id": "q02",
+        "tags": [
+          "table"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.41856813430786133,
+        "top": [
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.41856813430786133
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 8,
+            "similarity": 0.41393423080444336
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.40497803688049316
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.40421372652053833
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.35651350021362305
+          }
+        ]
+      },
+      {
+        "id": "q03",
+        "tags": [
+          "fact"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 2,
+        "top1_similarity": 0.48593759536743164,
+        "top": [
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.48593759536743164
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.4816056489944458
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.465107798576355
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 1,
+            "similarity": 0.4371204376220703
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.43475085496902466
+          }
+        ]
+      },
+      {
+        "id": "q04",
+        "tags": [
+          "comparison"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.6902912855148315,
+        "top": [
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.6902912855148315
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.6778839826583862
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 2,
+            "similarity": 0.6653370261192322
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 3,
+            "similarity": 0.6490540504455566
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 1,
+            "similarity": 0.6217199563980103
+          }
+        ]
+      },
+      {
+        "id": "q05",
+        "tags": [
+          "definition"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.7810924053192139,
+        "top": [
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 4,
+            "similarity": 0.7810924053192139
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 3,
+            "similarity": 0.5657665729522705
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 5,
+            "similarity": 0.5348930358886719
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 2,
+            "similarity": 0.49233728647232056
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 14,
+            "similarity": 0.47303229570388794
+          }
+        ]
+      },
+      {
+        "id": "q06",
+        "tags": [
+          "fact"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 4,
+        "top1_similarity": 0.48664581775665283,
+        "top": [
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 8,
+            "similarity": 0.48664581775665283
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 6,
+            "similarity": 0.45924675464630127
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 2,
+            "similarity": 0.38719260692596436
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 9,
+            "similarity": 0.3550034761428833
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 5,
+            "similarity": 0.35466623306274414
+          }
+        ]
+      },
+      {
+        "id": "q07",
+        "tags": [
+          "comparison"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.7276872396469116,
+        "top": [
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 7,
+            "similarity": 0.7276872396469116
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 15,
+            "similarity": 0.4865068197250366
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 6,
+            "similarity": 0.46592700481414795
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 14,
+            "similarity": 0.4473741054534912
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 3,
+            "similarity": 0.4257267117500305
+          }
+        ]
+      },
+      {
+        "id": "q08",
+        "tags": [
+          "comparison"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.6698391437530518,
+        "top": [
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 12,
+            "similarity": 0.6698391437530518
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 3,
+            "similarity": 0.6254978775978088
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 4,
+            "similarity": 0.5776076316833496
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 2,
+            "similarity": 0.5037318468093872
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 14,
+            "similarity": 0.47951269149780273
+          }
+        ]
+      },
+      {
+        "id": "q09",
+        "tags": [
+          "definition",
+          "roman_urdu"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.5402102470397949,
+        "top": [
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 3,
+            "similarity": 0.5402102470397949
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 1,
+            "similarity": 0.4438773989677429
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 32,
+            "similarity": 0.4418237805366516
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 30,
+            "similarity": 0.42360734939575195
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 31,
+            "similarity": 0.4084564447402954
+          }
+        ]
+      },
+      {
+        "id": "q10",
+        "tags": [
+          "fact",
+          "roman_urdu"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 5,
+        "top1_similarity": 0.36274051666259766,
+        "top": [
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 3,
+            "similarity": 0.36274051666259766
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 32,
+            "similarity": 0.36192381381988525
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 2,
+            "similarity": 0.3599125146865845
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 30,
+            "similarity": 0.35401761531829834
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 4,
+            "similarity": 0.33909714221954346
+          }
+        ]
+      },
+      {
+        "id": "q11",
+        "tags": [
+          "comparison",
+          "roman_urdu"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.675908088684082,
+        "top": [
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 17,
+            "similarity": 0.675908088684082
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 15,
+            "similarity": 0.5178426504135132
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 14,
+            "similarity": 0.5061236619949341
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 31,
+            "similarity": 0.5044644474983215
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 11,
+            "similarity": 0.4816058278083801
+          }
+        ]
+      },
+      {
+        "id": "q12",
+        "tags": [
+          "fact",
+          "roman_urdu"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 2,
+        "top1_similarity": 0.6508433818817139,
+        "top": [
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 17,
+            "similarity": 0.6508433818817139
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 34,
+            "similarity": 0.6030344367027283
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 31,
+            "similarity": 0.5108104944229126
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 36,
+            "similarity": 0.5106644630432129
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 20,
+            "similarity": 0.49669456481933594
+          }
+        ]
+      },
+      {
+        "id": "q13",
+        "tags": [
+          "fact",
+          "roman_urdu"
+        ],
+        "answerable": true,
+        "first_relevant_rank": 1,
+        "top1_similarity": 0.7164679169654846,
+        "top": [
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 13,
+            "similarity": 0.7164679169654846
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 10,
+            "similarity": 0.4955533742904663
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 15,
+            "similarity": 0.4942368268966675
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 33,
+            "similarity": 0.46081221103668213
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 11,
+            "similarity": 0.4439031481742859
+          }
+        ]
+      },
+      {
+        "id": "q14",
+        "tags": [
+          "negative"
+        ],
+        "answerable": false,
+        "first_relevant_rank": null,
+        "top1_similarity": 0.2528756856918335,
+        "top": [
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 11,
+            "similarity": 0.2528756856918335
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 32,
+            "similarity": 0.24197959899902344
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 30,
+            "similarity": 0.23694711923599243
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 11,
+            "similarity": 0.22790229320526123
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 7,
+            "similarity": 0.22492843866348267
+          }
+        ]
+      },
+      {
+        "id": "q15",
+        "tags": [
+          "negative"
+        ],
+        "answerable": false,
+        "first_relevant_rank": null,
+        "top1_similarity": 0.21761834621429443,
+        "top": [
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 10,
+            "similarity": 0.21761834621429443
+          },
+          {
+            "doc_id": "9d342b95139c3a153836e2ee1d1ef5d00ba2483fdbdd9d36d404dc6a5a7ff25b",
+            "filename": "SVM,K-mean,KNN.pdf",
+            "page": 14,
+            "similarity": 0.21333038806915283
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 5,
+            "similarity": 0.17053812742233276
+          },
+          {
+            "doc_id": "1ca89221355145227af9c7b92e6e56cde972b9ccf7daff83f92f7ac248c5b87c",
+            "filename": "LACE_research_paper_2col.pdf",
+            "page": 4,
+            "similarity": 0.16666173934936523
+          },
+          {
+            "doc_id": "f00df119cf8faec246585e54a5359b055ae54b173a0c4cc865e876ebef19585e",
+            "filename": "Lecture07_DecisionTrees.pdf",
+            "page": 3,
+            "similarity": 0.16504067182540894
+          }
+        ]
+      }
+    ]
+  }
+}

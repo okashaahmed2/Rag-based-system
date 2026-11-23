@@ -169,6 +169,8 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   through the real read path (build_retrieval_context + retrieve), hit@1/3/5/10 and
   MRR@10 overall and per tag; results go to eval/results/<date>_<config>.json (no
   question or chunk text).
+- Configuration changes are decided by a pre-registered rule (compare_eval.py);
+  baseline 600/120 MiniLM.
 
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434
