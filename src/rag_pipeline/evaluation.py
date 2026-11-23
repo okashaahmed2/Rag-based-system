@@ -17,13 +17,18 @@ renamed when it is moved or collides with another name).
 Metrics are computed over the ranks of answerable questions only; the caller
 leaves negative questions out (their rank is always ``None`` and would
 otherwise count as a miss).
+
+:func:`evaluate` runs a golden set through any retrieve callable and returns
+per-question ranks plus hit@k / MRR@k overall and per tag. It holds ids,
+filenames, pages, ranks and similarities only, never question or chunk text.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+import statistics
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -241,3 +246,235 @@ def mrr_at_k(ranks: Sequence[int | None], k: int) -> float:
     _check_ranks(ranks, k)
     total = sum(1.0 / r for r in ranks if r is not None and r <= k)
     return total / len(ranks)
+
+
+# --- evaluation runner -----------------------------------------------------------
+
+#: Cut-offs evaluated by default; retrieval asks for ``max(ks)`` results.
+DEFAULT_KS: tuple[int, ...] = (1, 3, 5, 10)
+#: Number of top results kept per question in the result.
+TOP_SHOWN = 5
+
+
+@dataclass(frozen=True)
+class RetrievedHit:
+    """One retrieved result as the evaluation sees it (no text).
+
+    Attributes:
+        doc_id: Document of the result.
+        page_number: 1-based page of the result.
+        similarity: Cosine similarity to the question.
+        filename: File name, if the retriever knows it.
+    """
+
+    doc_id: str
+    page_number: int
+    similarity: float
+    filename: str | None = None
+
+
+#: ``retrieve(question, top_k)`` -> results nearest first, at most ``top_k``.
+RetrieveFn = Callable[[str, int], Sequence[RetrievedHit]]
+
+
+@dataclass(frozen=True)
+class QuestionResult:
+    """Outcome for one golden question.
+
+    Attributes:
+        id: Question id.
+        tags: Question tags.
+        answerable: ``False`` for a negative question.
+        first_relevant_rank: 1-based rank of the first relevant result within
+            ``max(ks)`` results, or ``None`` (always ``None`` for negatives).
+        top: The first :data:`TOP_SHOWN` results.
+        top1_similarity: Similarity of the first result, ``None`` if there was none.
+    """
+
+    id: str
+    tags: tuple[str, ...]
+    answerable: bool
+    first_relevant_rank: int | None
+    top: tuple[RetrievedHit, ...]
+    top1_similarity: float | None
+
+
+@dataclass(frozen=True)
+class MetricSummary:
+    """hit@k and MRR for a group of questions.
+
+    ``hit_at`` and ``mrr`` are ``None`` when the group has no answerable
+    question (the metrics are undefined there, not 0).
+    """
+
+    questions: int
+    answerable: int
+    hit_at: dict[int, float] | None
+    mrr: float | None
+
+
+@dataclass(frozen=True)
+class SimilaritySummary:
+    """Top-1 similarities of answerable and negative questions.
+
+    Attributes:
+        answerable_top1_min / _median / _max: Over answerable questions with
+            at least one result; ``None`` if there is none.
+        answerable_without_results: Answerable questions that got no result.
+        negative_top1: ``(question id, top-1 similarity or None)`` per negative.
+    """
+
+    answerable_top1_min: float | None
+    answerable_top1_median: float | None
+    answerable_top1_max: float | None
+    answerable_without_results: int
+    negative_top1: tuple[tuple[str, float | None], ...]
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    """Everything :func:`evaluate` measured, in golden-set order."""
+
+    ks: tuple[int, ...]
+    mrr_k: int
+    questions: tuple[QuestionResult, ...]
+    overall: MetricSummary
+    per_tag: dict[str, MetricSummary]
+    similarity: SimilaritySummary
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready form (string keys, deterministic order)."""
+
+        def metrics(summary: MetricSummary) -> dict[str, Any]:
+            return {
+                "questions": summary.questions,
+                "answerable": summary.answerable,
+                "hit_at": None
+                if summary.hit_at is None
+                else {str(k): v for k, v in summary.hit_at.items()},
+                f"mrr_at_{self.mrr_k}": summary.mrr,
+            }
+
+        sim = self.similarity
+        return {
+            "ks": list(self.ks),
+            "mrr_k": self.mrr_k,
+            "overall": metrics(self.overall),
+            "per_tag": {tag: metrics(s) for tag, s in self.per_tag.items()},
+            "similarity": {
+                "answerable_top1": {
+                    "min": sim.answerable_top1_min,
+                    "median": sim.answerable_top1_median,
+                    "max": sim.answerable_top1_max,
+                    "without_results": sim.answerable_without_results,
+                },
+                "negative_top1": {qid: value for qid, value in sim.negative_top1},
+            },
+            "questions": [
+                {
+                    "id": q.id,
+                    "tags": list(q.tags),
+                    "answerable": q.answerable,
+                    "first_relevant_rank": q.first_relevant_rank,
+                    "top1_similarity": q.top1_similarity,
+                    "top": [
+                        {
+                            "doc_id": hit.doc_id,
+                            "filename": hit.filename,
+                            "page": hit.page_number,
+                            "similarity": hit.similarity,
+                        }
+                        for hit in q.top
+                    ],
+                }
+                for q in self.questions
+            ],
+        }
+
+
+def _check_ks(ks: Sequence[int]) -> tuple[int, ...]:
+    if not ks:
+        raise ValueError("ks must not be empty")
+    if not all(type(k) is int and k >= 1 for k in ks):
+        raise ValueError(f"ks must be ints >= 1, got {list(ks)!r}")
+    if len(set(ks)) != len(ks):
+        raise ValueError(f"ks must be unique, got {list(ks)!r}")
+    return tuple(sorted(ks))
+
+
+def _summarise(results: Sequence[QuestionResult], ks: tuple[int, ...]) -> MetricSummary:
+    """Metrics over the answerable questions in ``results`` (``None`` if there are none)."""
+    ranks = [r.first_relevant_rank for r in results if r.answerable]
+    if not ranks:
+        return MetricSummary(len(results), 0, None, None)
+    return MetricSummary(
+        questions=len(results),
+        answerable=len(ranks),
+        hit_at={k: hit_at_k(ranks, k) for k in ks},
+        mrr=mrr_at_k(ranks, max(ks)),
+    )
+
+
+def _similarity_summary(results: Sequence[QuestionResult]) -> SimilaritySummary:
+    answerable = [r for r in results if r.answerable]
+    values = [r.top1_similarity for r in answerable if r.top1_similarity is not None]
+    return SimilaritySummary(
+        answerable_top1_min=min(values) if values else None,
+        answerable_top1_median=statistics.median(values) if values else None,
+        answerable_top1_max=max(values) if values else None,
+        answerable_without_results=len(answerable) - len(values),
+        negative_top1=tuple((r.id, r.top1_similarity) for r in results if not r.answerable),
+    )
+
+
+def evaluate(
+    questions: Sequence[GoldenQuestion],
+    retrieve: RetrieveFn,
+    ks: Sequence[int] = DEFAULT_KS,
+) -> EvaluationResult:
+    """Run every question through ``retrieve`` and score the ranked results.
+
+    ``retrieve(question, max(ks))`` is called once per question, in order.
+    The rank of the first result on an expected ``(doc_id, page)`` decides
+    hit@k for every ``k`` and MRR@``max(ks)``; metrics cover answerable
+    questions only (negatives keep their top-1 similarity in the summary).
+    ``per_tag`` holds every tag in alphabetical order; a tag without
+    answerable questions has ``hit_at``/``mrr`` ``None``.
+
+    Raises:
+        ValueError: ``questions`` is empty, ``ks`` is invalid, or
+            ``retrieve`` returns more than ``max(ks)`` results.
+    """
+    if not questions:
+        raise ValueError("questions must not be empty")
+    sorted_ks = _check_ks(ks)
+    depth = max(sorted_ks)
+
+    results: list[QuestionResult] = []
+    for question in questions:
+        hits = list(retrieve(question.question, depth))
+        if len(hits) > depth:
+            raise ValueError(
+                f"retrieve returned {len(hits)} results for {question.id}, asked for {depth}"
+            )
+        rank = first_relevant_rank([(h.doc_id, h.page_number) for h in hits], question.expected)
+        results.append(
+            QuestionResult(
+                id=question.id,
+                tags=question.tags,
+                answerable=question.is_answerable,
+                first_relevant_rank=rank,
+                top=tuple(hits[:TOP_SHOWN]),
+                top1_similarity=hits[0].similarity if hits else None,
+            )
+        )
+
+    tags = sorted({tag for r in results for tag in r.tags})
+    return EvaluationResult(
+        ks=sorted_ks,
+        mrr_k=depth,
+        questions=tuple(results),
+        overall=_summarise(results, sorted_ks),
+        per_tag={tag: _summarise([r for r in results if tag in r.tags], sorted_ks) for tag in tags},
+        similarity=_similarity_summary(results),
+    )

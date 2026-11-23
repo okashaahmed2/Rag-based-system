@@ -227,3 +227,17 @@
   id); draft deleted. 15 questions (13 answerable, 2 negative; 4 LACE, 4 Lecture07,
   5 Roman Urdu notes). Found: SVM,K-mean,KNN.pdf is the Roman Urdu notes, so the
   roman_urdu tag is confounded with one document. 661 tests passing.
+- Step 2 prep committed e835fe9 and pushed.
+- Step 2: evaluation.evaluate (any retrieve callable; per-question ranks, hit@1/3/5/10
+  and MRR@10 overall and per tag, similarity summary) and scripts/run_eval.py (one-time
+  inbox copy to data/eval/corpus, eval store data/eval/stores/<config>/ with manifest,
+  golden doc_id done check, real read path, eval/results/<date>_<config>.json).
+  .gitignore: data/eval/. 16 evaluation + 14 run_eval tests. 691 tests passing.
+- Baseline 600/120 MiniLM (13 answerable): hit@1 0.692, hit@3 0.846, hit@5 1.000,
+  hit@10 1.000, MRR@10 0.795; misses at 1: q01 (rank 3), q06 (4), q10 (4), q12 (2).
+  Negatives top-1 0.253 / 0.218, answerable top-1 0.363-0.809. Second run: identical
+  results, nothing embedded (done files SKIPPED; invalid + password retried, attempt 2).
+- Found: the first printed summary named the duplicate svm_copy_renamed.pdf for
+  SVM-notes hits (doc_id -> filename map from the corpus list, last copy won); the
+  JSON (Chroma metadata) was correct. Fixed: summary uses the hit's filename, falling
+  back to the first corpus file; regression test added.

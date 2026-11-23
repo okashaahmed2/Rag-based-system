@@ -26,6 +26,8 @@ data/needs_ocr/*
 
 # --- Local storage: vector store and databases ---
 data/chroma/
+# Evaluation corpus copy + per-config eval stores (results in eval/results/ ARE tracked)
+data/eval/
 *.db
 *.db-journal
 *.db-wal

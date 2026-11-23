@@ -158,6 +158,17 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   page that answers it (any of them counts), copy the doc_id for that file, add tags.
 - Metrics over answerable questions only: hit@k (first relevant rank <= k) and
   MRR@k (1/rank, 0 if > k or none).
+- Isolated eval store ("exam hall"): scripts/run_eval.py copies the inbox PDFs once to
+  data/eval/corpus/ (all files, so the done-filter is exercised) and ingests them with
+  the real write path into data/eval/stores/<model>_<chunk_size>_<chunk_overlap>/
+  (own Chroma folder + status db + manifest.json). The live data/chroma and
+  data/status.db are never used. A store whose manifest (model, chunk values, corpus)
+  differs is refused; each configuration gets its own store so runs compare side by
+  side.
+- Every golden doc_id must be done in the eval store, else the run stops. Questions go
+  through the real read path (build_retrieval_context + retrieve), hit@1/3/5/10 and
+  MRR@10 overall and per tag; results go to eval/results/<date>_<config>.json (no
+  question or chunk text).
 
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama localhost:11434

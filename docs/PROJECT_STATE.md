@@ -22,7 +22,10 @@
   (commit 4dc8c15)
 - Phase 6 Step 1 (retrieval with done-filter + evaluation primitives, no LLM, no real
   evaluation run): COMPLETE (commit 8a641b4)
-- Next: Phase 6 Step 2: write the real golden set and run the first evaluation
+- Phase 6 Step 2 prep (verified golden set, 15 questions): COMPLETE (commit e835fe9)
+- Phase 6 Step 2 (isolated eval store + evaluation runner + first baseline run at
+  600/120 MiniLM): COMPLETE (not committed)
+- Next: Phase 6 Step 3: compare configurations (e.g. 800/120, another model)
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -244,7 +247,33 @@
   load_golden_set passes. SVM,K-mean,KNN.pdf IS the 36-page Roman Urdu notes
   (264 of 2405 words are hai/ka/ki/ke/nahi/aur/mein/ko); there is no separate
   English SVM document
-- 661 pytest tests passing
+- evaluate(): worked example [1, 3, None] -> hit@1 1/3, hit@3/5/10 2/3, MRR@10 4/9;
+  per-tag split; tag without answerable questions -> None (not 0); negatives excluded
+  from metrics but in the similarity summary; relevant page only at rank 7 -> miss at
+  5, hit at 10; empty retrieve result; deterministic to_dict (tests, fake retriever)
+- run_eval.py logic (tests, stub model): corpus copied once (copy2, inbox unchanged);
+  manifest mismatch (chunk_size, chunk_overlap, model name, corpus) refused before
+  any model load or store open; unreadable manifest refused; rebuild embeds nothing;
+  golden doc_id not done -> error naming each doc_id and its question ids
+- BASELINE (real run 2026-11-23, scripts/run_eval.py, store
+  data/eval/stores/all-minilm-l6-v2_600_120, MiniLM dim 384, 600/120, corpus = copy of
+  the 8 inbox PDFs; ingest done 4, failed 2, needs_ocr 1, skipped 1; 60.3 s):
+  OVERALL (13 answerable) hit@1 0.692, hit@3 0.846, hit@5 1.000, hit@10 1.000,
+  MRR@10 0.795. Per tag: comparison 4 -> 1.000/1.000/1.000/1.000 MRR 1.000;
+  definition 2 -> 1.000 all, MRR 1.000; fact 5 -> 0.400/0.600/1.000/1.000 MRR 0.600;
+  roman_urdu 5 -> 0.600/0.800/1.000/1.000 MRR 0.750; table 2 ->
+  0.500/1.000/1.000/1.000 MRR 0.667; negative 2 -> n/a
+- Baseline ranks: q01 3, q02 1, q03 1, q04 1, q05 1, q06 4, q07 1, q08 1, q09 1,
+  q10 4, q11 1, q12 2, q13 1 (misses at 1: q01 top-1 LACE p1, q06 Lecture07 p6,
+  q10 SVM notes p3, q12 SVM notes p17)
+- Baseline similarity: answerable top-1 min 0.363 (q10), median 0.651, max 0.809
+  (q04); negatives top-1 q14 0.253, q15 0.218 (both below every answerable top-1)
+- Second run on the same store: results identical (compared with the saved file), 9.2 s;
+  the 6 done/needs_ocr/duplicate files SKIPPED; invalid + password PDFs retried
+  (attempt 2) and failed at extraction (no embedding)
+- data/inbox names/sizes/mtimes identical before and after both runs; data/chroma
+  and data/status.db not created; results file contains 0 of 15 question texts
+- 691 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -253,7 +282,7 @@
 - OCR itself (Phase 13)
 - Ligatures and invisible-character rules on real PDF data (no real PDF contained
   any yet; unit tests only)
-- Retrieval quality at 600 vs 800 (Phase 6 golden set)
+- Retrieval quality at 600 vs 800 (Phase 6 Step 3; 600/120 baseline measured)
 - Denser PDFs may exceed 256 tokens at 600 chars (worst ~2.4 chars/token seen)
 - HF model download on a fresh machine / behind a proxy
 - Over-limit WARNING on real data (stub only; no real chunk > 256)
@@ -307,6 +336,14 @@
 - eval/golden_set.example.jsonl: 2 FAKE example lines (answerable + negative)
 - eval/golden_set.jsonl: verified golden evaluation set (15 questions)
 - scripts/list_doc_ids.py: filename<TAB>doc_id for every *.pdf in a folder (read-only)
+- src/rag_pipeline/evaluation.py also holds evaluate, EvaluationResult, QuestionResult,
+  MetricSummary, SimilaritySummary, RetrievedHit, RetrieveFn, DEFAULT_KS, TOP_SHOWN
+- scripts/run_eval.py: copy inbox -> data/eval/corpus (once), build/reuse
+  data/eval/stores/<config>/ (chroma + status.db + manifest.json), check golden
+  doc_ids done, score via build_retrieval_context + retrieve, write
+  eval/results/<date>_<config>.json, print ASCII summary
+- eval/results/2026-11-23_all-minilm-l6-v2_600_120.json: baseline result (tracked)
+- data/eval/ (git-ignored): corpus copy + eval stores
 - tests/: conftest.py, test_config.py, test_logging_config.py, test_extraction.py, test_inbox.py,
   test_cleaning.py, test_headers_footers.py, test_chunking.py, test_preparation.py,
   test_embeddings.py, test_vector_store.py, test_status_db.py, test_ingestion.py,
@@ -448,11 +485,33 @@
   empty input (undefined metric, no misleading 0.0); negatives are excluded by the
   caller
 - Golden set loader accepts a UTF-8 BOM (Windows PowerShell 5.1 writes one)
+- Evaluation runs only on an isolated eval store (data/eval/stores/<config>/, own
+  Chroma + status db), never on data/chroma / data/status.db; the corpus is a one-time
+  copy of the inbox incl. scanned/invalid/password/duplicate files so the done-filter
+  is exercised
+- Store name <config> = <model slug>_<chunk_size>_<chunk_overlap>
+  (all-minilm-l6-v2_600_120); manifest.json (model, dim, chunk values, corpus
+  filename+doc_id, created_at) is written before ingestion; a mismatch is refused,
+  never rebuilt in place (a different dim is refused by open_collection)
+- The eval store is filled with build_ingest_context + ingest_document (real write
+  path, no file moves) and read with build_retrieval_context + retrieve (real read
+  path); evaluate() takes any retrieve callable, so metric logic is tested without
+  a model
+- A golden doc_id that is not done in the eval store stops the run (exit 1)
+- MRR is reported at max(ks) = 10; hit@k for k in 1, 3, 5, 10; per-tag metrics for a
+  tag without answerable questions are n/a (None), not 0
+- Result files hold ids, filenames, pages, ranks, similarities, manifest and git
+  commit + dirty flag; no question or chunk text; eval/results/ is tracked,
+  data/eval/ is ignored
+- A same-day re-run overwrites the result file and reports whether the results are
+  identical to the previous file
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
   research papers (decided).
-- Roman Urdu notes: still to be checked with the Phase 6 golden set
+- Roman Urdu notes (all-MiniLM-L6-v2 vs a multilingual model): baseline roman_urdu
+  hit@1 0.600, hit@5 1.000, MRR@10 0.750 (5 questions, all from one document, so not
+  a language verdict); decision pending Step 3
   (all-MiniLM-L6-v2 vs a multilingual model).
 
 ## Verified versions
@@ -530,8 +589,22 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - roman_urdu tag is confounded with one document: all 5 roman_urdu questions come
   from SVM,K-mean,KNN.pdf, so a per-tag score cannot separate "Roman Urdu text"
   from "this document" (e.g. its formula/diagram extraction)
+- Small golden set: 13 answerable questions, so one question moves hit@k by 0.077;
+  per-tag groups have 2-5 questions (differences between configs may be noise)
+- hit@5 = hit@10 = 1.000 at baseline: the set cannot show improvements at k >= 5,
+  only at hit@1/hit@3/MRR
+- Negative top-1 similarities (0.218-0.253) sit below the lowest answerable top-1
+  (0.363) on this set only; not a validated refusal threshold
+- The eval corpus is a snapshot: later inbox changes are not reflected (by design);
+  changing it requires a new store (manifest refuses a changed corpus)
+- Each eval run retries the invalid and password PDFs until they reach
+  max_ingest_attempts (3), then they are skipped (ingestion behaviour, unchanged)
+- The baseline result was produced from an uncommitted working tree (git dirty =
+  true, commit e835fe9 recorded)
 
 ## Next precise task
-Phase 6 Step 2 — real golden set + first evaluation run (no LLM): user writes
-eval/golden_set.jsonl (10-15 questions, doc_ids via scripts/list_doc_ids.py);
-ingest into the real stores; run retrieve() per question and report hit@k / MRR@k.
+Phase 6 Step 3 — configuration comparison (no LLM): run scripts/run_eval.py for other
+configurations (e.g. --chunk-size 800 --chunk-overlap 120, possibly another model)
+into their own eval stores and compare with the 600/120 MiniLM baseline
+(eval/results/2026-11-23_all-minilm-l6-v2_600_120.json), focusing on hit@1, hit@3
+and MRR@10.

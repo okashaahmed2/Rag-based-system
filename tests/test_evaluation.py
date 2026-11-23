@@ -10,8 +10,13 @@ import pytest
 
 from rag_pipeline.config import PROJECT_ROOT
 from rag_pipeline.evaluation import (
+    DEFAULT_KS,
+    TOP_SHOWN,
     ExpectedSource,
+    GoldenQuestion,
     GoldenSetError,
+    RetrievedHit,
+    evaluate,
     first_relevant_rank,
     hit_at_k,
     load_golden_set,
@@ -291,3 +296,206 @@ def test_invalid_k_raises(metric: Any, k: Any) -> None:
 def test_invalid_rank_raises(metric: Any, rank: Any) -> None:
     with pytest.raises(ValueError, match="ranks must be"):
         metric([1, rank], 5)
+
+
+# --- evaluate ----------------------------------------------------------------------------
+
+
+def golden(qid: str, tags: tuple[str, ...], page: int | None) -> GoldenQuestion:
+    """Answerable question expecting DOC_A ``page``; ``page=None`` makes a negative."""
+    expected = () if page is None else (ExpectedSource(DOC_A, "a.pdf", (page,)),)
+    return GoldenQuestion(
+        id=qid, question=f"question {qid}", expected=expected, tags=tags, notes=None, line_number=1
+    )
+
+
+def hits_with_relevant_at(rank: int | None, n: int = 10, top_sim: float = 0.9) -> list[RetrievedHit]:
+    """``n`` results; the one at ``rank`` (1-based) is DOC_A page 1, the others DOC_B."""
+    return [
+        RetrievedHit(
+            doc_id=DOC_A if i == rank else DOC_B,
+            page_number=1 if i == rank else 50 + i,
+            similarity=round(top_sim - 0.01 * (i - 1), 6),
+            filename="a.pdf" if i == rank else "b.pdf",
+        )
+        for i in range(1, n + 1)
+    ]
+
+
+class FakeRetriever:
+    """Maps question text -> results and records every call."""
+
+    def __init__(self, table: dict[str, list[RetrievedHit]]) -> None:
+        self.table = table
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, question: str, top_k: int) -> list[RetrievedHit]:
+        self.calls.append((question, top_k))
+        return self.table[question][:top_k]
+
+
+def worked_example() -> tuple[list[GoldenQuestion], FakeRetriever]:
+    questions = [
+        golden("q1", ("definition",), 1),
+        golden("q2", ("table",), 1),
+        golden("q3", ("definition", "roman_urdu"), 1),
+        golden("n1", ("negative",), None),
+    ]
+    retriever = FakeRetriever(
+        {
+            "question q1": hits_with_relevant_at(1, top_sim=0.80),
+            "question q2": hits_with_relevant_at(3, top_sim=0.60),
+            "question q3": hits_with_relevant_at(None, top_sim=0.40),
+            "question n1": hits_with_relevant_at(None, top_sim=0.30),
+        }
+    )
+    return questions, retriever
+
+
+def test_evaluate_reproduces_worked_example() -> None:
+    questions, retriever = worked_example()
+
+    result = evaluate(questions, retriever)
+
+    assert result.ks == DEFAULT_KS == (1, 3, 5, 10)
+    assert result.mrr_k == 10
+    assert [q.first_relevant_rank for q in result.questions] == [1, 3, None, None]
+    overall = result.overall
+    assert (overall.questions, overall.answerable) == (4, 3)
+    assert overall.hit_at == pytest.approx({1: 1 / 3, 3: 2 / 3, 5: 2 / 3, 10: 2 / 3})
+    assert overall.mrr == pytest.approx((1 + 1 / 3 + 0) / 3)
+    assert retriever.calls == [(f"question {q.id}", 10) for q in questions]
+
+
+def test_evaluate_per_tag_split() -> None:
+    questions, retriever = worked_example()
+
+    per_tag = evaluate(questions, retriever).per_tag
+
+    assert list(per_tag) == ["definition", "negative", "roman_urdu", "table"]
+    definition = per_tag["definition"]
+    assert (definition.questions, definition.answerable) == (2, 2)
+    assert definition.hit_at == pytest.approx({1: 0.5, 3: 0.5, 5: 0.5, 10: 0.5})
+    assert definition.mrr == pytest.approx(0.5)
+    assert per_tag["table"].hit_at == pytest.approx({1: 0.0, 3: 1.0, 5: 1.0, 10: 1.0})
+    assert per_tag["table"].mrr == pytest.approx(1 / 3)
+    assert per_tag["roman_urdu"].hit_at == {1: 0.0, 3: 0.0, 5: 0.0, 10: 0.0}
+
+
+def test_tag_without_answerable_questions_is_reported_as_none_not_zero() -> None:
+    questions, retriever = worked_example()
+
+    negative = evaluate(questions, retriever).per_tag["negative"]
+
+    assert (negative.questions, negative.answerable) == (1, 0)
+    assert negative.hit_at is None and negative.mrr is None
+
+
+def test_negatives_excluded_from_metrics_but_in_similarity_summary() -> None:
+    questions, retriever = worked_example()
+    without_negative = evaluate(questions[:3], FakeRetriever(retriever.table))
+
+    result = evaluate(questions, retriever)
+
+    assert result.overall.hit_at == without_negative.overall.hit_at
+    assert result.overall.mrr == without_negative.overall.mrr
+    negative = result.questions[3]
+    assert (negative.answerable, negative.first_relevant_rank) == (False, None)
+    sim = result.similarity
+    assert sim.negative_top1 == (("n1", 0.30),)
+    assert (sim.answerable_top1_min, sim.answerable_top1_median, sim.answerable_top1_max) == (
+        0.40,
+        0.60,
+        0.80,
+    )
+    assert sim.answerable_without_results == 0
+
+
+def test_relevant_only_at_rank_seven_misses_at_five_hits_at_ten() -> None:
+    questions = [golden("q7", ("fact",), 1)]
+    retriever = FakeRetriever({"question q7": hits_with_relevant_at(7)})
+
+    result = evaluate(questions, retriever)
+
+    assert result.questions[0].first_relevant_rank == 7
+    assert result.overall.hit_at == {1: 0.0, 3: 0.0, 5: 0.0, 10: 1.0}
+    assert result.overall.mrr == pytest.approx(1 / 7)
+
+
+def test_rank_beyond_mrr_depth_is_not_seen() -> None:
+    questions = [golden("q7", ("fact",), 1)]
+    retriever = FakeRetriever({"question q7": hits_with_relevant_at(7)})
+
+    result = evaluate(questions, retriever, ks=(1, 5))
+
+    assert retriever.calls == [("question q7", 5)]
+    assert result.questions[0].first_relevant_rank is None
+    assert result.overall.mrr == 0.0
+
+
+def test_empty_retrieve_result() -> None:
+    questions = [golden("q1", ("fact",), 1), golden("n1", ("negative",), None)]
+    retriever = FakeRetriever({"question q1": [], "question n1": []})
+
+    result = evaluate(questions, retriever)
+
+    q1, n1 = result.questions
+    assert (q1.first_relevant_rank, q1.top, q1.top1_similarity) == (None, (), None)
+    assert result.overall.hit_at == {1: 0.0, 3: 0.0, 5: 0.0, 10: 0.0}
+    assert result.overall.mrr == 0.0
+    sim = result.similarity
+    assert sim.answerable_top1_min is sim.answerable_top1_median is sim.answerable_top1_max is None
+    assert sim.answerable_without_results == 1
+    assert sim.negative_top1 == (("n1", None),)
+
+
+def test_top_keeps_first_five_results_with_filenames() -> None:
+    questions = [golden("q1", ("fact",), 1)]
+    hits = hits_with_relevant_at(2)
+
+    top = evaluate(questions, FakeRetriever({"question q1": hits})).questions[0].top
+
+    assert len(top) == TOP_SHOWN == 5
+    assert top == tuple(hits[:5])
+    assert [h.filename for h in top] == ["b.pdf", "a.pdf", "b.pdf", "b.pdf", "b.pdf"]
+
+
+def test_evaluate_is_deterministic_and_json_ready() -> None:
+    questions, retriever = worked_example()
+
+    first = evaluate(questions, retriever).to_dict()
+    second = evaluate(questions, FakeRetriever(retriever.table)).to_dict()
+
+    assert first == second
+    assert json.dumps(first, sort_keys=False) == json.dumps(second, sort_keys=False)
+    assert list(first["overall"]["hit_at"]) == ["1", "3", "5", "10"]
+    assert first["overall"]["mrr_at_10"] == pytest.approx(4 / 9)
+    assert first["per_tag"]["negative"]["hit_at"] is None
+    assert first["similarity"]["negative_top1"] == {"n1": 0.30}
+    assert first["questions"][1]["top"][2] == {
+        "doc_id": DOC_A,
+        "filename": "a.pdf",
+        "page": 1,
+        "similarity": pytest.approx(0.58),
+    }
+    assert "question q1" not in json.dumps(first)  # no question text in results
+
+
+@pytest.mark.parametrize("ks", [(), (0, 5), (5, 5), (1.0,), (True,)])
+def test_evaluate_rejects_invalid_ks(ks: Any) -> None:
+    questions, retriever = worked_example()
+
+    with pytest.raises(ValueError, match="ks must"):
+        evaluate(questions, retriever, ks=ks)
+
+
+def test_evaluate_rejects_empty_questions() -> None:
+    with pytest.raises(ValueError, match="questions must not be empty"):
+        evaluate([], FakeRetriever({}))
+
+
+def test_evaluate_rejects_too_many_results() -> None:
+    questions = [golden("q1", ("fact",), 1)]
+
+    with pytest.raises(ValueError, match="returned 11 results"):
+        evaluate(questions, lambda question, top_k: hits_with_relevant_at(1, n=11), ks=(10,))
