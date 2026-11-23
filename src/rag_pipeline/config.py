@@ -36,6 +36,11 @@ _PATH_FIELDS: tuple[str, ...] = (
 #: Smallest allowed ``chunk_size`` setting, in characters.
 MIN_CHUNK_SIZE = 100
 
+#: Smallest allowed ``llm_num_ctx`` setting, in tokens.
+MIN_LLM_NUM_CTX = 512
+#: Largest allowed ``llm_temperature`` setting.
+MAX_LLM_TEMPERATURE = 2.0
+
 
 class Settings(BaseSettings):
     """Typed application settings.
@@ -77,6 +82,18 @@ class Settings(BaseSettings):
     status_db_path: Path = Path("data/status.db")
     #: Failed documents are retried until they have this many attempts.
     max_ingest_attempts: int = 3
+    #: Base URL of the local Ollama server (stored without a trailing slash).
+    #: 127.0.0.1, not localhost: on Windows localhost resolves to ::1 first while
+    #: Ollama listens on IPv4 only, measured at ~2.2 s extra per new connection.
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    #: Ollama model used to generate answers.
+    llm_model: str = "granite4.2:3b"
+    #: Sampling temperature (0 = deterministic).
+    llm_temperature: float = 0.0
+    #: Context window requested from Ollama, in tokens (prompt + answer).
+    llm_num_ctx: int = 4096
+    #: Timeout of one HTTP request to Ollama, in seconds.
+    llm_timeout_seconds: float = 120.0
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -109,6 +126,54 @@ class Settings(BaseSettings):
         """Require ``max_ingest_attempts >= 1``."""
         if value < 1:
             raise ValueError(f"RAG_MAX_INGEST_ATTEMPTS must be >= 1, got {value}")
+        return value
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def _check_ollama_base_url(cls, value: str) -> str:
+        """Require an ``http(s)://`` URL; strip whitespace and trailing slashes."""
+        url = value.strip().rstrip("/")
+        scheme, separator, host = url.partition("://")
+        if not separator or scheme.lower() not in ("http", "https") or not host:
+            raise ValueError(
+                f"RAG_OLLAMA_BASE_URL must be an http:// or https:// URL, got {value!r}"
+            )
+        return url
+
+    @field_validator("llm_model")
+    @classmethod
+    def _check_llm_model(cls, value: str) -> str:
+        """Require a non-empty model name (surrounding whitespace removed)."""
+        name = value.strip()
+        if not name:
+            raise ValueError("RAG_LLM_MODEL must not be empty")
+        return name
+
+    @field_validator("llm_temperature")
+    @classmethod
+    def _check_llm_temperature(cls, value: float) -> float:
+        """Require ``0 <= llm_temperature <= MAX_LLM_TEMPERATURE`` (NaN rejected)."""
+        if not 0.0 <= value <= MAX_LLM_TEMPERATURE:
+            raise ValueError(
+                f"RAG_LLM_TEMPERATURE must be between 0 and {MAX_LLM_TEMPERATURE}, "
+                f"got {value}"
+            )
+        return value
+
+    @field_validator("llm_num_ctx")
+    @classmethod
+    def _check_llm_num_ctx(cls, value: int) -> int:
+        """Require ``llm_num_ctx >= MIN_LLM_NUM_CTX``."""
+        if value < MIN_LLM_NUM_CTX:
+            raise ValueError(f"RAG_LLM_NUM_CTX must be >= {MIN_LLM_NUM_CTX}, got {value}")
+        return value
+
+    @field_validator("llm_timeout_seconds")
+    @classmethod
+    def _check_llm_timeout_seconds(cls, value: float) -> float:
+        """Require ``llm_timeout_seconds > 0`` (NaN rejected)."""
+        if not value > 0:
+            raise ValueError(f"RAG_LLM_TIMEOUT_SECONDS must be > 0, got {value}")
         return value
 
     @model_validator(mode="after")
