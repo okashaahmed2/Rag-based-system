@@ -124,9 +124,11 @@ def test_initialize_creates_folder_table_index_and_version(
     store: StatusStore, db_path: Path
 ) -> None:
     assert db_path.is_file()
-    assert raw(db_path, "PRAGMA user_version") == [(SCHEMA_VERSION,)] == [(1,)]
+    assert raw(db_path, "PRAGMA user_version") == [(SCHEMA_VERSION,)] == [(2,)]
     names = {row[0] for row in raw(db_path, "SELECT name FROM sqlite_master")}
-    assert {"documents", "idx_documents_status"} <= names
+    assert {
+        "documents", "idx_documents_status", "jobs", "idx_jobs_status", "idx_jobs_one_active"
+    } <= names
 
 
 def test_initialize_twice_is_harmless(store: StatusStore, db_path: Path) -> None:
@@ -134,14 +136,14 @@ def test_initialize_twice_is_harmless(store: StatusStore, db_path: Path) -> None
 
     store.initialize()
 
-    assert raw(db_path, "PRAGMA user_version") == [(1,)]
+    assert raw(db_path, "PRAGMA user_version") == [(2,)]
     assert store.get_document(DOC) is not None
 
 
 def test_newer_schema_version_raises(store: StatusStore, db_path: Path) -> None:
-    raw(db_path, "PRAGMA user_version = 2")
+    raw(db_path, "PRAGMA user_version = 3")
 
-    with pytest.raises(StatusStoreError, match="schema version 2"):
+    with pytest.raises(StatusStoreError, match="schema version 3"):
         StatusStore(db_path).initialize()
 
 

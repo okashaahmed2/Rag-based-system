@@ -1,4 +1,4 @@
-"""Document status register in SQLite (stdlib ``sqlite3``).
+"""Document and job status register in SQLite (stdlib ``sqlite3``).
 
 One row per document (``doc_id`` = SHA-256 of the file bytes, so no separate
 file hash is stored) records where the document is in its lifecycle::
@@ -8,9 +8,28 @@ file hash is stored) records where the document is in its lifecycle::
     processing       -> done (chunk_count) | needs_ocr (chunk_count 0)
                         | failed (error_message)
 
+One row per job (a ``scan`` of the inbox or an ``ingest`` of one file)
+records the job's lifecycle::
+
+    (new)   -> queued
+    queued  -> running     (started_at)
+    running -> succeeded   (finished_at, summary)
+    running -> failed      (finished_at, error_message, optional summary)
+
+``succeeded`` means the job finished its work, even if some documents
+failed (those go into the summary); ``failed`` means the job itself crashed.
+At most one job is active (``queued`` or ``running``) at a time:
+:meth:`StatusStore.create_job_or_get_active` checks and inserts in one
+immediate transaction, and the partial unique index ``idx_jobs_one_active``
+rejects a second active row even from a raw ``INSERT``.
+
 Any other transition raises :class:`StatusStoreError` and changes nothing:
-every transition is a single conditional ``UPDATE ... WHERE doc_id = ? AND
+every transition is a single conditional ``UPDATE ... WHERE <id> = ? AND
 status IN (...)`` inside an immediate transaction.
+
+Schema versions (``PRAGMA user_version``): 1 = ``documents``; 2 = adds
+``jobs``. :meth:`StatusStore.initialize` migrates 0 or 1 to 2 in one
+transaction; existing ``documents`` rows are never touched.
 
 Every method opens its own short-lived connection, closed with
 :func:`contextlib.closing` (``with sqlite3.connect()`` only ends the
@@ -23,29 +42,35 @@ interrupted, and :meth:`StatusStore.recover_interrupted` marks it ``failed``.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterator
+import uuid
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 #: Schema version stored in ``PRAGMA user_version``.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 #: Seconds a connection waits for a lock held by another connection.
 BUSY_TIMEOUT_SECONDS = 5.0
 #: Longest error message stored; longer messages are trimmed.
 MAX_ERROR_MESSAGE_CHARS = 2000
 #: Error message written by :meth:`StatusStore.recover_interrupted`.
 INTERRUPTED_MESSAGE = "interrupted: process stopped during processing"
+#: Error message written by :meth:`StatusStore.recover_interrupted_jobs`.
+JOB_INTERRUPTED_MESSAGE = "interrupted: process stopped before the job finished"
 #: Number of leading ``doc_id`` characters shown in log lines.
 LOG_DOC_ID_CHARS = 12
 
-_SCHEMA = (
+# Schema version 1: the documents table (unchanged since version 1).
+_SCHEMA_V1 = (
     """
     CREATE TABLE IF NOT EXISTS documents (
         doc_id TEXT PRIMARY KEY,
@@ -61,7 +86,38 @@ _SCHEMA = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status)",
 )
-_SET_SCHEMA_VERSION = "PRAGMA user_version = 1"
+# Schema version 2: adds the jobs table.
+_SCHEMA_V2 = (
+    """
+    CREATE TABLE IF NOT EXISTS jobs (
+        job_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('scan', 'ingest')),
+        target TEXT,
+        status TEXT NOT NULL
+            CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        error_message TEXT,
+        summary_json TEXT,
+        CHECK (
+            (kind = 'scan' AND target IS NULL)
+            OR (kind = 'ingest' AND target IS NOT NULL AND length(trim(target)) > 0)
+        )
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status)",
+    # Second line of defence for "at most one active job": every active row has
+    # the same indexed value (1), finished rows are not in the partial index.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_one_active "
+    "ON jobs ((status IN ('queued', 'running'))) "
+    "WHERE status IN ('queued', 'running')",
+)
+#: Name of the unique index that allows at most one active job.
+ONE_ACTIVE_JOB_INDEX = "idx_jobs_one_active"
+#: ``(version, statements)``: statements run when the stored version is lower.
+_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = ((1, _SCHEMA_V1), (2, _SCHEMA_V2))
+_SET_SCHEMA_VERSION = "PRAGMA user_version = 2"
 
 # Every statement is a complete literal; values are always bound parameters.
 _SELECT_ONE = (
@@ -107,6 +163,36 @@ _SELECT_KNOWN = (
     "OR (status = 'failed' AND attempts >= ?)"
 )
 
+_JOB_COLUMNS = (
+    "job_id, kind, target, status, created_at, started_at, finished_at, "
+    "error_message, summary_json"
+)
+_SELECT_JOB = f"SELECT {_JOB_COLUMNS} FROM jobs WHERE job_id = ?"
+_SELECT_ACTIVE_JOB = (
+    f"SELECT {_JOB_COLUMNS} FROM jobs WHERE status IN ('queued', 'running') "
+    "ORDER BY created_at, job_id LIMIT 1"
+)
+_INSERT_QUEUED_JOB = (
+    "INSERT INTO jobs (job_id, kind, target, status, created_at) VALUES (?, ?, ?, 'queued', ?)"
+)
+_UPDATE_JOB_TO_RUNNING = (
+    "UPDATE jobs SET status = 'running', started_at = ? "
+    "WHERE job_id = ? AND status IN ('queued')"
+)
+_UPDATE_JOB_TO_SUCCEEDED = (
+    "UPDATE jobs SET status = 'succeeded', finished_at = ?, summary_json = ?, "
+    "error_message = NULL WHERE job_id = ? AND status IN ('running')"
+)
+_UPDATE_JOB_TO_FAILED = (
+    "UPDATE jobs SET status = 'failed', finished_at = ?, error_message = ?, summary_json = ? "
+    "WHERE job_id = ? AND status IN ('running')"
+)
+_SELECT_ACTIVE_JOB_IDS = "SELECT job_id, kind, status FROM jobs WHERE status IN ('queued', 'running')"
+_RECOVER_ACTIVE_JOBS = (
+    "UPDATE jobs SET status = 'failed', finished_at = ?, error_message = ? "
+    "WHERE status IN ('queued', 'running')"
+)
+
 
 class StatusStoreError(Exception):
     """Raised for invalid transitions, invalid input or database failures."""
@@ -147,8 +233,106 @@ class DocumentRecord:
     updated_at: datetime
 
 
+class JobKind(str, Enum):
+    """What a job does."""
+
+    SCAN = "scan"
+    INGEST = "ingest"
+
+
+class JobStatus(str, Enum):
+    """Lifecycle status of one job."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class JobRecord:
+    """One row of the ``jobs`` table.
+
+    Attributes:
+        job_id: Random id (uuid4 hex by default).
+        kind: ``scan`` (whole inbox) or ``ingest`` (one file).
+        target: File name for ``ingest``; ``None`` for ``scan``.
+        status: Current lifecycle status.
+        created_at: Creation time (UTC, timezone-aware).
+        started_at: Time the job started running, else ``None``.
+        finished_at: Time the job succeeded or failed, else ``None``.
+        error_message: Why the job itself failed (``failed`` only), else ``None``.
+        summary: Result summary (decoded JSON object), or ``None``.
+    """
+
+    job_id: str
+    kind: JobKind
+    target: str | None
+    status: JobStatus
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error_message: str | None
+    summary: dict[str, Any] | None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _new_job_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _trimmed_error(error_message: str) -> str:
+    """Stripped message, trimmed to ``MAX_ERROR_MESSAGE_CHARS``; empty raises."""
+    message = error_message.strip()
+    if not message:
+        raise StatusStoreError("error_message must not be empty")
+    return message[:MAX_ERROR_MESSAGE_CHARS]
+
+
+def _encode_summary(summary: Mapping[str, Any] | None) -> str | None:
+    """JSON text of ``summary`` (sorted keys, non-ASCII kept); ``None`` stays ``None``."""
+    if summary is None:
+        return None
+    if not isinstance(summary, Mapping):
+        raise StatusStoreError(f"summary must be a mapping, got {type(summary).__name__}")
+    try:
+        return json.dumps(dict(summary), sort_keys=True, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise StatusStoreError(f"summary is not JSON-serialisable: {exc}") from exc
+
+
+def _decode_summary(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        decoded = json.loads(str(value))
+    except ValueError as exc:
+        raise StatusStoreError(f"Stored job summary is not valid JSON: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise StatusStoreError("Stored job summary is not a JSON object")
+    return decoded
+
+
+def _parse_optional_time(value: object) -> datetime | None:
+    return None if value is None else _parse_time(str(value))
+
+
+def _to_job(row: tuple[object, ...]) -> JobRecord:
+    job_id, kind, target, status, created, started, finished, error, summary = row
+    return JobRecord(
+        job_id=str(job_id),
+        kind=JobKind(kind),
+        target=None if target is None else str(target),
+        status=JobStatus(status),
+        created_at=_parse_time(str(created)),
+        started_at=_parse_optional_time(started),
+        finished_at=_parse_optional_time(finished),
+        error_message=None if error is None else str(error),
+        summary=_decode_summary(summary),
+    )
 
 
 def _parse_time(value: str) -> datetime:
@@ -176,13 +360,21 @@ class StatusStore:
     """Document status register backed by one SQLite file.
 
     Creating the object touches nothing; call :meth:`initialize` once before
-    use. ``clock`` returns the current time (timezone-aware) and is meant for
-    tests; the default is the real UTC time.
+    use. ``clock`` returns the current time (timezone-aware) and
+    ``job_id_factory`` returns a new job id; both are meant for tests (the
+    defaults are the real UTC time and ``uuid4().hex``).
     """
 
-    def __init__(self, path: Path, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        job_id_factory: Callable[[], str] | None = None,
+    ) -> None:
         self._path = path
         self._clock = clock if clock is not None else _utc_now
+        self._job_id_factory = job_id_factory if job_id_factory is not None else _new_job_id
 
     @property
     def path(self) -> Path:
@@ -247,7 +439,11 @@ class StatusStore:
     # --- schema ----------------------------------------------------------------
 
     def initialize(self) -> None:
-        """Create the folder, table, index and schema version (idempotent).
+        """Create or migrate the schema to :data:`SCHEMA_VERSION` (idempotent).
+
+        In one immediate transaction: version 0 gets both tables, version 1
+        gets the ``jobs`` table only (``documents`` rows untouched), version 2
+        is left as is. A newer version raises and nothing is changed.
 
         Raises:
             StatusStoreError: the database has a newer schema version, or the
@@ -266,10 +462,19 @@ class StatusStore:
                     f"Status database {self._path} has schema version {version}, "
                     f"this code supports up to {SCHEMA_VERSION}"
                 )
-            for statement in _SCHEMA:
-                conn.execute(statement)
+            for target_version, statements in _MIGRATIONS:
+                if version < target_version:
+                    for statement in statements:
+                        conn.execute(statement)
             if version < SCHEMA_VERSION:
                 conn.execute(_SET_SCHEMA_VERSION)
+        if 0 < version < SCHEMA_VERSION:
+            logger.info(
+                "Status database %s migrated from schema version %d to %d",
+                self._path,
+                version,
+                SCHEMA_VERSION,
+            )
         logger.info("Status database ready at %s (schema version %d)", self._path, SCHEMA_VERSION)
 
     # --- writes ----------------------------------------------------------------
@@ -378,10 +583,7 @@ class StatusStore:
         Raises:
             StatusStoreError: empty message or invalid transition.
         """
-        message = error_message.strip()
-        if not message:
-            raise StatusStoreError("error_message must not be empty")
-        message = message[:MAX_ERROR_MESSAGE_CHARS]
+        message = _trimmed_error(error_message)
         record = self._transition(
             doc_id,
             (DocumentStatus.PROCESSING,),
@@ -447,3 +649,191 @@ class StatusStore:
         with self._transaction() as conn:
             rows = conn.execute(_SELECT_KNOWN, (max_attempts,)).fetchall()
         return {str(row[0]) for row in rows}
+
+    # --- jobs ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch_job(conn: sqlite3.Connection, job_id: str) -> JobRecord | None:
+        row = conn.execute(_SELECT_JOB, (job_id,)).fetchone()
+        return None if row is None else _to_job(row)
+
+    @staticmethod
+    def _fetch_active_job(conn: sqlite3.Connection) -> JobRecord | None:
+        row = conn.execute(_SELECT_ACTIVE_JOB).fetchone()
+        return None if row is None else _to_job(row)
+
+    def create_job_or_get_active(
+        self, kind: JobKind | str, target: str | None = None
+    ) -> tuple[JobRecord, bool]:
+        """Create a ``queued`` job unless one is active; return ``(job, created)``.
+
+        In one immediate transaction: if a job is ``queued`` or ``running``
+        (any kind) it is returned with ``created=False`` and nothing is
+        inserted; otherwise a new ``queued`` job is inserted (``created=True``).
+
+        Raises:
+            StatusStoreError: unknown ``kind``; a ``scan`` with a ``target`` or
+                an ``ingest`` without a non-empty ``target``; database error.
+        """
+        try:
+            job_kind = JobKind(kind)
+        except ValueError as exc:
+            raise StatusStoreError(f"Unknown job kind {kind!r}") from exc
+        if job_kind is JobKind.SCAN and target is not None:
+            raise StatusStoreError("a scan job takes no target")
+        if job_kind is JobKind.INGEST and (target is None or not target.strip()):
+            raise StatusStoreError("an ingest job needs a non-empty target (file name)")
+
+        now = self._now()
+        with self._transaction() as conn:
+            active = self._fetch_active_job(conn)
+            if active is not None:
+                created = False
+                job = active
+            else:
+                job_id = self._job_id_factory()
+                try:
+                    conn.execute(_INSERT_QUEUED_JOB, (job_id, job_kind.value, target, now))
+                except sqlite3.IntegrityError as exc:
+                    # Normally unreachable (checked just above in the same
+                    # transaction); the unique index is the second line of defence.
+                    logger.error("Job %s not inserted: %s", job_id, exc)
+                    reason = (
+                        "another job is already active"
+                        if ONE_ACTIVE_JOB_INDEX in str(exc)
+                        else "constraint violated"
+                    )
+                    raise StatusStoreError(f"Cannot create job {job_id}: {reason} ({exc})") from exc
+                fetched = self._fetch_job(conn, job_id)
+                if fetched is None:
+                    raise StatusStoreError(f"Job {job_id} missing right after insert")
+                created = True
+                job = fetched
+        if created:
+            logger.info(
+                "Job %s (%s%s): new -> queued",
+                job.job_id,
+                job.kind.value,
+                f" {job.target}" if job.target else "",
+            )
+        else:
+            logger.info(
+                "Job not created: job %s (%s) is already %s",
+                job.job_id,
+                job.kind.value,
+                job.status.value,
+            )
+        return job, created
+
+    def _job_transition(
+        self,
+        job_id: str,
+        allowed_from: tuple[JobStatus, ...],
+        new_status: JobStatus,
+        sql: str,
+        values: tuple[object, ...],
+    ) -> JobRecord:
+        """Run one conditional job UPDATE; raise if the current status does not allow it.
+
+        ``sql`` is one of this module's literal ``_UPDATE_JOB_TO_*`` statements;
+        ``values`` end with ``job_id``. ``allowed_from`` must match the
+        statement's ``status IN (...)`` list; it is used for the message only.
+        """
+        with self._transaction() as conn:
+            before = self._fetch_job(conn, job_id)
+            cursor = conn.execute(sql, values)
+            if cursor.rowcount != 1:
+                current = "unknown job_id" if before is None else f"status {before.status.value}"
+                raise StatusStoreError(
+                    f"Cannot move job {job_id} to {new_status.value}: {current} "
+                    f"(allowed from {', '.join(s.value for s in allowed_from)})"
+                )
+            after = self._fetch_job(conn, job_id)
+        if before is None or after is None:
+            raise StatusStoreError(f"Job {job_id} vanished during a transition")
+        logger.info(
+            "Job %s (%s): %s -> %s",
+            job_id,
+            after.kind.value,
+            before.status.value,
+            after.status.value,
+        )
+        return after
+
+    def mark_job_running(self, job_id: str) -> JobRecord:
+        """``queued`` -> ``running`` (sets ``started_at``)."""
+        return self._job_transition(
+            job_id,
+            (JobStatus.QUEUED,),
+            JobStatus.RUNNING,
+            _UPDATE_JOB_TO_RUNNING,
+            (self._now(), job_id),
+        )
+
+    def mark_job_succeeded(self, job_id: str, summary: Mapping[str, Any]) -> JobRecord:
+        """``running`` -> ``succeeded`` with its summary (sets ``finished_at``).
+
+        Raises:
+            StatusStoreError: ``summary`` is not a JSON-serialisable mapping
+                (checked before any write) or invalid transition.
+        """
+        encoded = _encode_summary(summary)
+        if encoded is None:
+            raise StatusStoreError("summary must be a mapping, got None")
+        return self._job_transition(
+            job_id,
+            (JobStatus.RUNNING,),
+            JobStatus.SUCCEEDED,
+            _UPDATE_JOB_TO_SUCCEEDED,
+            (self._now(), encoded, job_id),
+        )
+
+    def mark_job_failed(
+        self, job_id: str, error_message: str, summary: Mapping[str, Any] | None = None
+    ) -> JobRecord:
+        """``running`` -> ``failed``; message trimmed to 2000 characters.
+
+        Raises:
+            StatusStoreError: empty message, a ``summary`` that is not a
+                JSON-serialisable mapping (both checked before any write),
+                or invalid transition.
+        """
+        message = _trimmed_error(error_message)
+        encoded = _encode_summary(summary)
+        record = self._job_transition(
+            job_id,
+            (JobStatus.RUNNING,),
+            JobStatus.FAILED,
+            _UPDATE_JOB_TO_FAILED,
+            (self._now(), message, encoded, job_id),
+        )
+        logger.info("Job %s failed: %s", job_id, message)
+        return record
+
+    def get_job(self, job_id: str) -> JobRecord | None:
+        """The record for ``job_id``, or ``None`` if there is no such job."""
+        with self._transaction() as conn:
+            return self._fetch_job(conn, job_id)
+
+    def get_active_job(self) -> JobRecord | None:
+        """The ``queued`` or ``running`` job, or ``None`` if no job is active."""
+        with self._transaction() as conn:
+            return self._fetch_active_job(conn)
+
+    def recover_interrupted_jobs(self) -> int:
+        """Mark every ``queued`` or ``running`` job ``failed`` (idempotent).
+
+        Run once at startup: in this single-process system, a job still active
+        then was interrupted. Returns the number of jobs changed.
+        """
+        now = self._now()
+        with self._transaction() as conn:
+            stuck = conn.execute(_SELECT_ACTIVE_JOB_IDS).fetchall()
+            cursor = conn.execute(_RECOVER_ACTIVE_JOBS, (now, JOB_INTERRUPTED_MESSAGE))
+            changed = cursor.rowcount
+        for job_id, kind, status in stuck:
+            logger.warning(
+                "Job %s (%s): %s -> failed (%s)", job_id, kind, status, JOB_INTERRUPTED_MESSAGE
+            )
+        logger.info("Recovered %d interrupted job(s)", changed)
+        return changed
