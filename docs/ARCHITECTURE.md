@@ -35,7 +35,9 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   (pending/processing/done/failed/needs_ocr), error_message, attempts, chunk_count,
   timestamps. State machine: new -> pending; pending | failed -> processing;
   processing -> done | needs_ocr | failed. Interrupted processing rows are recovered
-  to failed at startup. Jobs table in Phase 8.
+  to failed at startup. Jobs table (schema v2, Phase 8): job_id, kind (scan |
+  ingest), target (file name for ingest), status (queued/running/succeeded/failed),
+  created/started/finished timestamps, error_message, summary_json; see API.
 
 ## Design rules
 - doc_id = SHA-256 of PDF bytes; duplicates detected from Phase 2
@@ -200,5 +202,46 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   ~118-125 tok/s (about 1 s per 120-token chunk), generation ~19 tok/s;
   model load 2-35 s on a cold start.
 
+## API (Phase 8)
+- App factory: rag_pipeline.api.app:create_app, run with
+  `uvicorn ... --factory` (one worker, one process, 127.0.0.1:8000). Importing
+  the package builds nothing.
+- Lifespan (once per start, before any request): build_ingest_context
+  (status store + document recovery + model + collection), then
+  recover_interrupted_jobs, then one shared httpx.Client for Ollama. The
+  RetrievalContext reuses the ingest context's store, collection and model.
+  The client is closed on shutdown. A setup failure stops the server.
+- Endpoints (all plain def, run in FastAPI's threadpool; Pydantic models for
+  every request and response):
+
+| Method + path | Codes | Purpose |
+|---|---|---|
+| GET /health | 200 | status ok/degraded, embedding model, chunk count, document counts, active job, Ollama check |
+| POST /ingest/scan | 202 | start a scan job, or return the active job (already_running) |
+| POST /ingest | 202 / 404 / 409 / 422 | ingest one file already in the inbox (body {filename}) |
+| GET /status/{job_id} | 200 / 404 | one job (kind, target, status, timestamps, error, summary) |
+| POST /query | 200 / 422 / 502 / 503 / 504 | answer with citations and sources |
+
+- Jobs: queued -> running -> succeeded (summary) | failed ("Type: message").
+  "succeeded" means the job finished even if some documents failed; "failed"
+  means the job itself crashed. A failure to record job state is logged
+  CRITICAL and never re-raised. Jobs still queued/running at startup are
+  marked failed (interrupted).
+- At most one active job of any kind (checked in one immediate transaction,
+  plus the partial unique index idx_jobs_one_active). /ingest/scan returns the
+  active job (202); /ingest answers 409 with it.
+- /ingest accepts only a plain file name: format errors -> 422, not a regular
+  file directly in the inbox -> 404, both before any job exists; messages never
+  echo the name or a path. Job summaries replace local paths by file names.
+- /query fails closed: answer text only for answered, the fixed not-found
+  message for not_found, null for no_citations / bad_citations / empty;
+  "not found" is HTTP 200. Errors: retrieval 503, LLM unavailable or model
+  missing 503, invalid LLM response 502, LLM timeout 504; anything else 500.
+  The question is never logged or echoed.
+- Hugging Face stays offline: HF_HUB_DISABLE_TELEMETRY=1 (and HF_HUB_OFFLINE=1
+  with local_files_only) are set in the process before the model library is
+  imported.
+
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama 127.0.0.1:11434
+(runs on CPU: CUDA_VISIBLE_DEVICES=-1 until the NVIDIA driver upgrade)

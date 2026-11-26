@@ -324,3 +324,88 @@
 - Decision: default llama3.2:3b by mentor judgment (pre-registered rule
   failed on condition 3; granite failed conditions 1 and 4). Commit ff40009.
   948 tests passing. Phase 7 complete.
+
+## 2026-11-23 — Phase 8
+- Step 0 (read-only): port 8000 free; uvicorn 0.54.0 already present via
+  chromadb; plan for /ingest/scan, /status/{job_id}, /query with a jobs table,
+  BackgroundTasks and one shared httpx client. No installs.
+
+## 2026-11-26 — Phase 8
+- Step 1: fastapi 0.165.0 + starlette 1.10.0 installed (nothing else changed);
+  fastapi>=0.165,<0.166 and uvicorn>=0.54,<1 declared. api/app.py: create_app
+  factory (run with --factory), lifespan builds the ingest context once and
+  derives the RetrievalContext from it (one Chroma client, one model), one
+  shared httpx.Client closed on shutdown, GET /health (plain def, Ollama
+  problems -> 200 "degraded"). configure_logging parameter so tests keep
+  pytest's logging. Routes registered with app.add_api_route instead of an
+  APIRouter (FastAPI 0.165 _IncludedRouter observation by Claude Code, not
+  independently verified). RAG_API_HOST / RAG_API_PORT settings. Commit 59d53ad.
+- User's manual test from their own terminal: server up in 7.39 s, /docs
+  opened, Ctrl+C logged "API stopped: HTTP client closed"; a /health call failed
+  only because it was sent after the server had stopped.
+- Step 1c: diagnosis runs showed huggingface_hub 2.4.0 sending GET
+  {ENDPOINT}/api/agent-harnesses on every model load even with
+  local_files_only=True (build_hf_headers -> detect_agent -> _fetch_registry;
+  cached 24 h in ~/.cache/huggingface/.agent_harnesses.json; independent of
+  agent env vars). Fix: apply_hf_runtime_env (setdefault
+  HF_HUB_DISABLE_TELEMETRY=1, and HF_HUB_OFFLINE=1 with local_files_only),
+  called in load_embedding_model before the sentence_transformers import ->
+  no Hub request, cache file not recreated. .env values are not exported to
+  os.environ, so the variables are set in the process. Commit e4f7ec3.
+- Step 2: jobs table and schema v2 migration in status_db.py (_MIGRATIONS);
+  documents rows byte-identical after v1 -> v2 (tests + eval-store copy, 7
+  rows, original hash unchanged). create_job_or_get_active allows at most one
+  queued/running job of any kind; 50 rounds x 2 threads gave exactly one job
+  per round. Commit 0b5ae53.
+
+## 2026-11-27 — Phase 8
+- The Claude Code session that built Step 3 was deleted before it reported.
+  A new session ran a read-only resume check: Step 2 was already committed
+  and pushed, including idx_jobs_one_active (the partial unique index); Step 3
+  code was complete but uncommitted; 1106 tests passing. Nothing was lost.
+- Step 3 verified against its spec (9 items present): lifespan job recovery,
+  POST /ingest/scan (202, active job returned with already_running), GET
+  /status/{job_id} (404 for unknown or malformed ids), run_job, summary_from_
+  report, typed /health documents + active_job. Real server on scratch copies:
+  double POST -> same job_id, already_running true; job ~6 s; /status median
+  ~5 ms, max 17-29 ms while running.
+- Found: per-file error strings in job summaries held absolute paths (e.g.
+  PdfExtractionError messages). Fixed in jobs.py only: the file's full path,
+  resolved path and absolute parent folder are replaced by the file name before
+  trimming (5 tests, 1111 passing). Real check: no scratch path and no ":\" in
+  /status JSON. Logs and the documents table keep the full text.
+- Mentor's expectation for the second scan (done files skipped) was wrong: the
+  first scan had already moved them to processed, so the second scan saw only
+  the invalid and password PDFs, retried at attempt 2. Commit d5316b1.
+- Step 4: POST /ingest {filename} for a file already in the inbox:
+  validate_inbox_filename (format -> 422, not a regular file directly in the
+  inbox -> 404, both before any job is created), 409 with the active job,
+  ingest_one_file (ingest_document + placement by status, missing file ->
+  failed result), run_job generalised via _run_work without changing the scan
+  path. 91 tests, 1202 passing. Real check: bad names 422 with no job row,
+  same name after success 404, POST /ingest right after a scan -> 409 with the
+  scan's job_id, not_a_pdf_test.pdf failed at attempt 2 and stayed in the
+  inbox. Commit 87dde5a.
+- Step 5: POST /query (QueryRequest stripped 1..1000 chars, top_k strict int
+  1..20; fail-closed answer; citations only for answered; sources without chunk
+  text; timings null when the LLM was not called). Errors: RetrievalError 503,
+  LLMUnavailable/ModelNotFound 503, LLMResponseError 502, LLMTimeoutError 504;
+  the ValueError -> 422 mapping was removed before the commit (a ValueError can
+  only be a bug -> 500). 1237 passing. Commit 0ee831e.
+- Step 5 real check: before ingestion 200 not_found without the LLM; 3 queries
+  during a scan embedded concurrently with ingestion without errors; Ollama on
+  a closed port -> 503 "LLM server unavailable", /health degraded. Every real
+  answer failed: Ollama /api/chat returned HTTP 500 "llama-server process has
+  terminated: exit status 0xc0000409" (mapped to 502), for llama3.2:3b and
+  granite4.2:3b, also outside the API. Cause: the GTX 1080 Ti had been
+  installed, Ollama (auto-updated 0.40.17 -> 0.40.18) started using CUDA, and
+  driver 566.36 is below Ollama's 570 minimum ("PTX was compiled with an
+  unsupported toolchain"). Fixed for now with the user variable
+  CUDA_VISIBLE_DEVICES=-1; it only took effect after Ollama was fully
+  restarted.
+- Step 6 (manual end-to-end from the user's terminal, temp copy of data/inbox,
+  llama3.2:3b on CPU): startup 5.92 s; scan 2.05 s (done 4, failed 2, needs_ocr
+  1; 86 chunks); q06 answered "Outlook ... 0.246" citing Lecture07 p.9
+  (expected) + p.5 in 6.0 s; q14 (negative) not_found 4.4 s; q03 not_found
+  6.9 s (same miss as Phase 7). The ~25-49 s startups seen earlier happened only
+  inside Claude Code processes (cause unknown). Phase 8 complete.

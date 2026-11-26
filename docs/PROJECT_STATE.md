@@ -40,7 +40,21 @@
 - Phase 7 Step 3b (answer_question, model-proof answers, default
   llama3.2:3b): COMPLETE (commit ff40009)
 - Phase 7 (local LLM, prompt with citations, NOT_FOUND behaviour): COMPLETE
-- Next: Phase 8 Step 0 (see Next precise task)
+- Phase 8 Step 0 (read-only FastAPI check): COMPLETE
+- Phase 8 Step 1 (app factory, lifespan, shared httpx client, /health): COMPLETE
+  (commit 59d53ad)
+- Phase 8 Step 1c (HF model loading kept off the network): COMPLETE (commit e4f7ec3)
+- Phase 8 Step 2 (jobs table, schema v2, single active job + partial unique index):
+  COMPLETE (commit 0b5ae53)
+- Phase 8 Step 3 (/ingest/scan, /status, background job runner, startup job
+  recovery, no local paths in job summaries): COMPLETE (commit d5316b1)
+- Phase 8 Step 4 (POST /ingest one inbox file, validated name, 409): COMPLETE
+  (commit 87dde5a)
+- Phase 8 Step 5 (POST /query, fail-closed answers, error mapping): COMPLETE
+  (commit 0ee831e)
+- Phase 8 Step 6 (manual end-to-end from the user's terminal): COMPLETE (2026-11-27)
+- Phase 8 (FastAPI backend): COMPLETE
+- Next: see Next precise task
 
 ## Verified (with evidence)
 - Phase 1: Python 3.11 venv, Git/GitHub, pyproject editable install, pydantic-settings config, logging
@@ -344,6 +358,38 @@
 - A query-only run changes the eval store's Chroma file bytes; status.db and
   manifest.json unchanged; retrieval results reproduced exactly
 - 948 pytest tests passing
+- fastapi 0.165.0 + starlette 1.10.0 installed (nothing else changed); uvicorn
+  0.54.0 declared; port 8000 free (Phase 8 Step 0)
+- Lifespan builds the ingest context once (document recovery once), then job
+  recovery once; RetrievalContext derived from the ingest context (one Chroma
+  client, one model); shared httpx.Client closed on shutdown (tests + real
+  Ctrl+C: "API stopped: HTTP client closed")
+- /health plain def; Ollama problems -> 200 "degraded"; fixed DocumentCounts +
+  active_job
+- HF: huggingface_hub 2.4.0 sent GET {ENDPOINT}/api/agent-harnesses on every
+  model load even with local_files_only=True (build_hf_headers -> detect_agent
+  -> _fetch_registry; cached 24 h in ~/.cache/huggingface/.agent_harnesses.json;
+  independent of agent env vars). apply_hf_runtime_env (setdefault
+  HF_HUB_DISABLE_TELEMETRY=1; HF_HUB_OFFLINE=1 with local_files_only), called in
+  load_embedding_model before the sentence_transformers import -> no Hub
+  request, cache file not recreated
+- Schema v1 -> v2 keeps documents rows byte-identical (tests + eval-store copy,
+  7 rows, original hash unchanged); single active job: 50 rounds x 2 threads,
+  exactly one job per round (repeated); idx_jobs_one_active rejects a 2nd
+  active row
+- /ingest/scan: double POST -> same job_id, already_running true; scan after
+  finish -> new job; /status latency during ingestion median ~5 ms, max 17-29 ms
+- /ingest: bad names (../, C:\..., .txt, CON.pdf) -> 422 with no job row;
+  missing -> 404; while a scan runs -> 409 with the scan's job_id; same name
+  again after success -> 404 (file already moved to processed)
+- /query: no done docs -> 200 not_found without LLM; Ollama on a closed port ->
+  503 "LLM server unavailable"; 3 queries during a scan embedded concurrently
+  with ingestion, no errors (light test, not a stress test)
+- Step 6 end-to-end (user's terminal, temp copy of data/inbox, llama3.2:3b on
+  CPU): startup 5.92 s; scan 2.05 s (done 4, failed 2, needs_ocr 1; 86 chunks);
+  q06 answered "Outlook ... 0.246" citing Lecture07 p.9 (expected) + p.5, 6.0 s;
+  q14 (negative) not_found 4.4 s; q03 not_found 6.9 s (same miss as Phase 7)
+- 1237 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -378,6 +424,10 @@
   automatically; manual review only
 - llama3.2:3b on documents or questions beyond the 15-question golden set
 - n8n -> FastAPI latency with "localhost" (Phase 9)
+- Ollama on the GTX 1080 Ti GPU (needs NVIDIA driver >= 570; installed 566.36)
+- Concurrent encode under load (only 3 queries during one scan tested)
+- Real n8n calls (Phase 9)
+- Cause of the ~25-49 s startups seen only inside Claude Code processes
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -456,6 +506,23 @@
   (sources with *EXPECTED*, LLM miss vs retrieval miss; no result file)
 - scripts/llm_think_probe.py: diagnosis record of the granite thinking leak
 - tests/test_llm.py, tests/test_answering.py, tests/test_answer_question.py
+- src/rag_pipeline/api/__init__.py (builds nothing on import)
+- src/rag_pipeline/api/app.py: create_app, lifespan, ApiState, models, routes
+  /health, /ingest/scan, /ingest, /status/{job_id}, /query; QUERY_ERRORS
+- src/rag_pipeline/api/jobs.py: _run_work, run_job, run_ingest_job,
+  summary_from_report (local paths replaced by file names)
+- src/rag_pipeline/api/validation.py: validate_inbox_filename,
+  InboxFilenameError (422), InboxFileNotFoundError (404)
+- src/rag_pipeline/inbox_ingestion.py also holds ingest_one_file (+ private _place,
+  _destination_folders)
+- src/rag_pipeline/status_db.py also holds jobs: JobKind, JobStatus, JobRecord,
+  create_job_or_get_active, mark_job_*, get_job, get_active_job,
+  recover_interrupted_jobs; schema v2 + _MIGRATIONS
+- src/rag_pipeline/embeddings.py also holds apply_hf_runtime_env;
+  src/rag_pipeline/config.py also holds api_host, api_port
+- tests/test_api_app.py, tests/test_api_jobs.py, tests/test_api_ingest.py,
+  tests/test_api_validation.py, tests/test_api_query.py,
+  tests/test_inbox_one_file.py, tests/test_status_db_jobs.py
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
@@ -639,6 +706,38 @@
   llm_smoke + rag_smoke + manual answer review
 - Lesson: condition 3 counts an honest NOT_FOUND like a hallucination;
   Phase 11 metrics must separate correct / abstained / wrong
+- API handlers are plain def (run in the threadpool); async def would block the
+  event loop with the blocking pipeline calls
+- One Uvicorn worker, one process, 127.0.0.1, run with --factory
+- Ingest context built once in the lifespan; job recovery only at startup (in a
+  request it would fail a live job)
+- At most one active ingestion job of any kind (code + partial unique index);
+  /ingest/scan returns the active job (202, already_running); /ingest -> 409
+- Job "succeeded" = the job finished even if documents failed; "failed" = the job
+  itself crashed; run_job catches Exception only; failure to record job state ->
+  CRITICAL, never re-raised
+- /ingest takes a plain file name already in the inbox (whitelist validation,
+  resolved parent must be the inbox; no upload, no python-multipart); invalid
+  requests never create a job; error messages never echo the name or a path
+- /query answers fail closed: text only for answered; fixed message for
+  not_found; null for no_citations/bad_citations/empty; "not found" is HTTP 200
+- /query errors: RetrievalError 503, LLMUnavailable/ModelNotFound 503,
+  LLMResponseError 502, LLMTimeoutError 504; ValueError NOT mapped (bug -> 500);
+  question never logged or echoed
+- Shared Ollama client passed via functools.partial(chat, client=...)
+- HF env vars set in the process (apply_hf_runtime_env in load_embedding_model)
+  before the model library import (.env is not exported to os.environ); with
+  local_files_only this now also sets HF_HUB_OFFLINE=1 process-wide (the Phase 4
+  note "not HF_HUB_OFFLINE" no longer holds alone)
+- Routes via app.add_api_route (FastAPI 0.165 _IncludedRouter observation by
+  Claude Code, not independently verified)
+- GPU: Ollama forced to CPU with user env var CUDA_VISIBLE_DEVICES=-1
+  (2026-11-27) until the NVIDIA driver is upgraded; embeddings stay on CPU
+  (torch +cpu)
+- Lessons: commit after every verified step and update docs at session end (a
+  Claude Code session was deleted on 2026-11-27; nothing lost); change one thing
+  at a time (driver upgrade deferred); Phase 4's "no network" check missed the
+  HF header path; Ollama auto-updates on Windows (0.40.17 -> 0.40.18)
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -659,12 +758,18 @@ pydantic 2.14.3 | pytest 9.2.0 | pymupdf 2.1 | numpy 2.4.6 (declared dependency
 since Phase 4 Step 2b) | onnxruntime 1.31.1 |
 sentence-transformers 6.3.0 | torch 2.15.0+cpu | transformers 5.23.0 |
 tokenizers 0.23.3 | huggingface-hub 2.4.0 | chromadb 1.5.9 |
-git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2 | httpx 0.28.1 | Ollama 0.40.17 | llama3.2:3b | granite4.2:3b (rejected)
+git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2 | httpx 0.28.1 |
+Ollama 0.40.18 (auto-updated from 0.40.17) | llama3.2:3b | granite4.2:3b (rejected) |
+fastapi 0.165.0 | starlette 1.10.0 | uvicorn 0.54.0 (declared >=0.54,<1) |
+anyio 4.16.0 | httpx2 2.16.2 (via huggingface_hub) | NVIDIA driver 566.36
 
 ## Hardware (verified)
 Intel Core i5-14400F (10C/16T), 15.8 GB RAM (2 x 8 GB DDR4-3200, dual channel; 5.99-6.82 GB free with
 Chrome + VS Code open),
-AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
+NVIDIA GeForce GTX 1080 Ti 11 GB (Pascal, compute 6.1), installed 2026-11-27,
+driver 566.36 (CUDA 12.7) — below Ollama's 570 minimum for compute 5.0-6.2;
+LLM currently forced to CPU,
+Windows 11, PowerShell 5.1
 
 ## Risks
 - Windows console (cp1252) cannot print some characters (e.g. emoji) from extracted text;
@@ -758,9 +863,25 @@ AMD Radeon HD 7000 (CPU only), Windows 11, PowerShell 5.1
 - Cold model load 2-35 s after Ollama unloads the model (keep_alive ~5 min)
 - llama3.2:3b license: Llama 3.2 Community License ("Built with Llama" in the
   README, Phase 14)
+- Ollama auto-update can change behaviour (0.40.18 started using CUDA)
+- CUDA_VISIBLE_DEVICES=-1 is a user-level variable: it also hides the GPU from
+  other CUDA apps; must be removed for the GPU step
+- NVIDIA R580 is the last driver branch for Pascal (GTX 10); 590+ does not
+  support the 1080 Ti
+- Jobs table grows without cleanup; /health 500 if Chroma/SQLite fail; /health
+  shows the Ollama URL/OS error text; RAG_API_HOST accepts 0.0.0.0 (Phase 12)
+- Absolute paths still appear in logs and in the documents table error_message
+- HF env vars process-wide, sticky, inherited by child processes
+- uvicorn --reload re-runs startup recovery; v2 db unreadable by code <= e4f7ec3
+- 422 has two shapes (string detail for bad names, list for malformed bodies)
+- File replaced between /ingest validation and the job -> new bytes ingested
 
 ## Next precise task
-Phase 8 Step 0 — FastAPI basics + READ-ONLY check: fastapi / uvicorn /
-pydantic versions in the venv (uvicorn 0.54.0 is present via chromadb),
-port 8000 free, and a plan for /ingest/scan, /status/{job_id}, /query
-(job table, BackgroundTasks, one shared httpx client). No installs.
+Choose at the start of the next session:
+(A) GPU step: install the latest NVIDIA R580-branch driver for the GTX 1080 Ti,
+remove CUDA_VISIBLE_DEVICES, restart Ollama, confirm `ollama ps` shows GPU,
+rerun llm_smoke + rag_smoke, compare latency with CPU (median ~8 s Phase 7,
+4.4-6.9 s Step 6).
+(B) Phase 9 Step 0: n8n basics + read-only check (n8n 2.14.2 via npm, port
+5678, Schedule Trigger -> POST /ingest/scan -> poll /status), live data paths
+decision (data/inbox, data/chroma, data/status.db are still unused).
