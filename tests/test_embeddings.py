@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import subprocess
 import sys
 import types
@@ -17,8 +18,11 @@ from pydantic import ValidationError
 from rag_pipeline.config import Settings
 from rag_pipeline.embeddings import (
     EMBEDDING_DEVICE,
+    HF_OFFLINE_ENV,
+    HF_TELEMETRY_ENV,
     ChunkEmbeddings,
     EmbeddingError,
+    apply_hf_runtime_env,
     count_tokens,
     embed_chunks,
     embed_query,
@@ -29,6 +33,25 @@ from rag_pipeline.preparation import DocumentChunk
 DIM = 8
 MAX_SEQ = 6
 MODEL_NAME = "stub/model"
+HF_VARS = (HF_TELEMETRY_ENV, HF_OFFLINE_ENV)
+
+
+@pytest.fixture(autouse=True)
+def restore_hf_env() -> Iterator[None]:
+    """Start every test without the HF variables and restore the originals after.
+
+    ``load_embedding_model`` sets them in the real ``os.environ``; without this
+    they would leak into later tests and subprocesses.
+    """
+    saved = {name: os.environ.get(name) for name in HF_VARS}
+    for name in HF_VARS:
+        os.environ.pop(name, None)
+    yield
+    for name, value in saved.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 class StubTokenizer:
@@ -292,6 +315,140 @@ def test_load_embedding_model_wraps_os_error(
 
     assert isinstance(info.value.__cause__, OSError)
     assert any("missing/model" in r.getMessage() for r in caplog.records)
+
+
+# --- apply_hf_runtime_env ------------------------------------------------------
+
+
+def test_hf_env_unset_variables_are_set_to_1() -> None:
+    apply_hf_runtime_env(True)
+
+    assert os.environ[HF_TELEMETRY_ENV] == "1"
+    assert os.environ[HF_OFFLINE_ENV] == "1"
+
+
+def test_hf_env_user_values_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(HF_TELEMETRY_ENV, "0")
+    monkeypatch.setenv(HF_OFFLINE_ENV, "0")
+
+    apply_hf_runtime_env(True)
+
+    assert os.environ[HF_TELEMETRY_ENV] == "0"
+    assert os.environ[HF_OFFLINE_ENV] == "0"
+
+
+def test_hf_env_offline_untouched_without_local_files_only() -> None:
+    apply_hf_runtime_env(False)
+
+    assert os.environ[HF_TELEMETRY_ENV] == "1"
+    assert HF_OFFLINE_ENV not in os.environ
+
+
+def test_hf_env_debug_log_names_set_and_present_variables(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv(HF_OFFLINE_ENV, "1")
+
+    with caplog.at_level(logging.DEBUG, logger="rag_pipeline.embeddings"):
+        apply_hf_runtime_env(True)
+
+    message = caplog.records[-1].getMessage()
+    assert caplog.records[-1].levelno == logging.DEBUG
+    assert f"set ['{HF_TELEMETRY_ENV}']" in message
+    assert f"already present ['{HF_OFFLINE_ENV}']" in message
+
+
+def test_hf_env_is_set_before_sentence_transformers_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str | None] = {}
+
+    class RecordingModule(types.ModuleType):
+        """Records os.environ when the code takes SentenceTransformer from it."""
+
+        def __getattr__(self, name: str) -> Any:
+            if name != "SentenceTransformer":
+                raise AttributeError(name)
+            seen.update({var: os.environ.get(var) for var in HF_VARS})
+
+            class Fake(StubModel):
+                def __init__(self, model_name: str, **kwargs: Any) -> None:
+                    super().__init__()
+
+            return Fake
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", RecordingModule("sentence_transformers"))
+    load_embedding_model.cache_clear()
+    try:
+        load_embedding_model("some/model", True)
+    finally:
+        load_embedding_model.cache_clear()
+
+    assert seen == {HF_TELEMETRY_ENV: "1", HF_OFFLINE_ENV: "1"}
+
+
+def _fake_hub(monkeypatch: pytest.MonkeyPatch, *, telemetry: bool, offline: bool) -> None:
+    hub = types.ModuleType("huggingface_hub")
+    constants = types.ModuleType("huggingface_hub.constants")
+    constants.HF_HUB_DISABLE_TELEMETRY = telemetry  # type: ignore[attr-defined]
+    constants.HF_HUB_OFFLINE = offline  # type: ignore[attr-defined]
+    hub.constants = constants  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    monkeypatch.setitem(sys.modules, "huggingface_hub.constants", constants)
+
+
+def test_hf_env_warns_when_huggingface_hub_was_imported_too_early(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _fake_hub(monkeypatch, telemetry=False, offline=False)
+
+    with caplog.at_level(logging.WARNING, logger="rag_pipeline.embeddings"):
+        apply_hf_runtime_env(True)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert HF_TELEMETRY_ENV in warnings[0].getMessage()
+    assert HF_OFFLINE_ENV in warnings[0].getMessage()
+
+
+def test_hf_env_late_warning_ignores_offline_without_local_files_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _fake_hub(monkeypatch, telemetry=True, offline=False)
+
+    with caplog.at_level(logging.WARNING, logger="rag_pipeline.embeddings"):
+        apply_hf_runtime_env(False)
+
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_hf_env_no_warning_when_imported_hub_already_has_the_flags(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _fake_hub(monkeypatch, telemetry=True, offline=True)
+
+    with caplog.at_level(logging.WARNING, logger="rag_pipeline.embeddings"):
+        apply_hf_runtime_env(True)
+
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_hf_env_reaches_real_huggingface_hub_constants() -> None:
+    code = (
+        "import os, sys; "
+        "[os.environ.pop(n, None) for n in ('HF_HUB_OFFLINE', 'HF_HUB_DISABLE_TELEMETRY', "
+        "'TRANSFORMERS_OFFLINE', 'DISABLE_TELEMETRY', 'DO_NOT_TRACK')]; "
+        "from rag_pipeline.embeddings import apply_hf_runtime_env; "
+        "assert 'huggingface_hub' not in sys.modules; "
+        "apply_hf_runtime_env(True); "
+        "import huggingface_hub.constants as c; "
+        "print(c.HF_HUB_OFFLINE, c.HF_HUB_DISABLE_TELEMETRY)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120
+    )
+
+    assert completed.stdout.strip() == "True True"
 
 
 def test_importing_module_does_not_import_sentence_transformers() -> None:

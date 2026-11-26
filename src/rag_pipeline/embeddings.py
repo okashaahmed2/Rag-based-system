@@ -19,6 +19,8 @@ No vectors are stored here; storage happens in a later phase.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -34,6 +36,12 @@ logger = logging.getLogger(__name__)
 
 #: Device the model runs on (the target machine has no usable GPU).
 EMBEDDING_DEVICE = "cpu"
+
+#: Disables huggingface_hub telemetry, including its agent-harness registry
+#: request (``GET {ENDPOINT}/api/agent-harnesses``), made even for local loads.
+HF_TELEMETRY_ENV = "HF_HUB_DISABLE_TELEMETRY"
+#: Forbids every Hugging Face Hub request (set only for local-only loading).
+HF_OFFLINE_ENV = "HF_HUB_OFFLINE"
 
 FloatArray = npt.NDArray[np.float32]
 
@@ -114,6 +122,45 @@ def model_max_seq_length(model: EmbeddingModel) -> int:
     return _require_positive("max_seq_length", model.max_seq_length)
 
 
+def apply_hf_runtime_env(local_files_only: bool) -> None:
+    """Set the Hugging Face environment variables that keep model loading local.
+
+    ``HF_HUB_DISABLE_TELEMETRY=1`` is always set; with ``local_files_only``
+    ``HF_HUB_OFFLINE=1`` is set too. A value already present (set by the user)
+    is never overwritten. huggingface_hub reads these variables once, when it
+    is imported, so this must run before that import: if huggingface_hub is
+    already loaded and its constants do not reflect the variables, a WARNING
+    says the change came too late (the constants are not patched).
+
+    The variables must live in the process environment: values in ``.env``
+    are read by pydantic-settings only and never reach huggingface_hub.
+    """
+    wanted = [HF_TELEMETRY_ENV] + ([HF_OFFLINE_ENV] if local_files_only else [])
+    set_by_us = [name for name in wanted if name not in os.environ]
+    for name in wanted:
+        os.environ.setdefault(name, "1")
+    logger.debug(
+        "Hugging Face env: set %s, already present %s",
+        set_by_us or "none",
+        [name for name in wanted if name not in set_by_us] or "none",
+    )
+
+    hub = sys.modules.get("huggingface_hub")
+    if hub is None:
+        return
+    constants = sys.modules.get("huggingface_hub.constants") or getattr(hub, "constants", None)
+    if constants is None:
+        return
+    not_applied = [name for name in wanted if getattr(constants, name, None) is not True]
+    if not_applied:
+        logger.warning(
+            "huggingface_hub was imported before the Hugging Face environment was set; "
+            "%s not in effect for this process (set them in the real environment to "
+            "stop Hub requests)",
+            ", ".join(not_applied),
+        )
+
+
 @lru_cache(maxsize=4)
 def load_embedding_model(model_name: str, local_files_only: bool = False) -> EmbeddingModel:
     """Load a Sentence Transformers model on CPU, once per ``(name, flag)``.
@@ -123,10 +170,14 @@ def load_embedding_model(model_name: str, local_files_only: bool = False) -> Emb
     model was not downloaded before. The result is cached; call
     ``load_embedding_model.cache_clear()`` to force a reload.
 
+    :func:`apply_hf_runtime_env` runs first, before ``sentence_transformers``
+    (and with it huggingface_hub) is imported.
+
     Raises:
         EmbeddingError: the model cannot be found, downloaded or read, or
             reports no usable dimension / max_seq_length.
     """
+    apply_hf_runtime_env(local_files_only)
     from sentence_transformers import SentenceTransformer
 
     started = time.perf_counter()
