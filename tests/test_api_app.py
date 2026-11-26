@@ -369,6 +369,7 @@ def test_health_ok_when_ollama_has_the_model(tmp_path: Path) -> None:
         "embedding_model": MODEL_NAME,
         "collection": {"name": "chunks", "chunk_count": 0},
         "documents": {"pending": 0, "processing": 0, "done": 0, "failed": 0, "needs_ocr": 0},
+        "active_job": None,
         "ollama": {"reachable": True, "model": LLM_MODEL, "model_available": True, "error": None},
     }
 
