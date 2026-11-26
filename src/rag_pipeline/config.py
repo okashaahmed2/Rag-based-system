@@ -46,6 +46,9 @@ MAX_LLM_MAX_ANSWER_TOKENS = 2048
 #: Allowed range of the ``query_top_k`` setting.
 MIN_QUERY_TOP_K = 1
 MAX_QUERY_TOP_K = 20
+#: Allowed range of the ``api_port`` setting.
+MIN_API_PORT = 1
+MAX_API_PORT = 65535
 
 
 class Settings(BaseSettings):
@@ -105,6 +108,10 @@ class Settings(BaseSettings):
     llm_max_answer_tokens: int = 256
     #: Number of chunks retrieved and sent to the LLM per question.
     query_top_k: int = 5
+    #: Interface the FastAPI server binds to (127.0.0.1 = this machine only).
+    api_host: str = "127.0.0.1"
+    #: TCP port of the FastAPI server.
+    api_port: int = 8000
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -206,6 +213,25 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"RAG_QUERY_TOP_K must be between {MIN_QUERY_TOP_K} and "
                 f"{MAX_QUERY_TOP_K}, got {value}"
+            )
+        return value
+
+    @field_validator("api_host")
+    @classmethod
+    def _check_api_host(cls, value: str) -> str:
+        """Require a non-empty host (surrounding whitespace removed)."""
+        host = value.strip()
+        if not host:
+            raise ValueError("RAG_API_HOST must not be empty")
+        return host
+
+    @field_validator("api_port")
+    @classmethod
+    def _check_api_port(cls, value: int) -> int:
+        """Require ``MIN_API_PORT <= api_port <= MAX_API_PORT``."""
+        if not MIN_API_PORT <= value <= MAX_API_PORT:
+            raise ValueError(
+                f"RAG_API_PORT must be between {MIN_API_PORT} and {MAX_API_PORT}, got {value}"
             )
         return value
 

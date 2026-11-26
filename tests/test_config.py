@@ -267,6 +267,54 @@ def test_relative_needs_ocr_dir_resolves_under_project_root(tmp_path: Path) -> N
     assert settings.needs_ocr_dir == tmp_path / "ocr"
 
 
+def test_api_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.api_host == "127.0.0.1"
+    assert settings.api_port == 8000
+
+
+def test_api_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_API_HOST", "  0.0.0.0  ")
+    monkeypatch.setenv("RAG_API_PORT", "8080")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.api_host == "0.0.0.0"
+    assert settings.api_port == 8080
+
+
+@pytest.mark.parametrize("port", ["1", "65535"])
+def test_api_port_bounds_are_accepted(port: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_API_PORT", port)
+
+    assert Settings(_env_file=None).api_port == int(port)
+
+
+@pytest.mark.parametrize("bad_port", ["0", "-1", "65536", "100000"])
+def test_out_of_range_api_port_raises(bad_port: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_API_PORT", bad_port)
+
+    with pytest.raises(ValidationError, match="RAG_API_PORT must be between 1 and 65535"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("bad_port", ["eighty", "80.5", ""])
+def test_non_integer_api_port_raises(bad_port: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_API_PORT", bad_port)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("bad_host", ["", "   "])
+def test_empty_api_host_raises(bad_host: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_API_HOST", bad_host)
+
+    with pytest.raises(ValidationError, match="RAG_API_HOST must not be empty"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     first = get_settings()
 
