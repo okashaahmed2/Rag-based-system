@@ -2,8 +2,9 @@
 
 Routes: ``GET /health``, ``POST /ingest/scan`` (202, starts a background scan
 job or returns the active one), ``POST /ingest`` (202, ingests one file that
-is already in the inbox; 409 while any job is active) and
-``GET /status/{job_id}``.
+is already in the inbox; 409 while any job is active),
+``GET /status/{job_id}`` and ``POST /query`` (200, answer with citations;
+502/503/504 when retrieval or the LLM fails).
 
 Run with::
 
@@ -34,6 +35,7 @@ blocking, and FastAPI runs ``def`` routes in its worker threadpool.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import time
@@ -42,12 +44,14 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
+
+from rag_pipeline.answering import AnswerStatus, RagAnswer, answer_question
 
 from rag_pipeline.api.jobs import InboxRunner, SingleFileRunner, run_ingest_job, run_job
 from rag_pipeline.api.validation import (
@@ -55,7 +59,7 @@ from rag_pipeline.api.validation import (
     InboxFileNotFoundError,
     validate_inbox_filename,
 )
-from rag_pipeline.config import Settings, get_settings
+from rag_pipeline.config import MAX_QUERY_TOP_K, MIN_QUERY_TOP_K, Settings, get_settings
 from rag_pipeline.embeddings import load_embedding_model
 from rag_pipeline.inbox_ingestion import ingest_inbox, ingest_one_file
 from rag_pipeline.ingestion import (
@@ -68,10 +72,13 @@ from rag_pipeline.llm import (
     LLMError,
     LLMModelNotFoundError,
     LLMResponseError,
+    LLMTimeoutError,
+    LLMUnavailableError,
+    chat,
     check_ollama,
 )
 from rag_pipeline.logging_config import setup_logging
-from rag_pipeline.retrieval import RetrievalContext
+from rag_pipeline.retrieval import RetrievalContext, RetrievalError
 from rag_pipeline.status_db import (
     DocumentStatus,
     JobKind,
@@ -92,6 +99,20 @@ HttpClientFactory = Callable[[Settings], httpx.Client]
 JOB_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 JOB_NOT_FOUND = "job not found"
 JOB_CONFLICT = "another job is active; retry when it has finished"
+
+#: Longest accepted question, after stripping.
+MAX_QUESTION_CHARS = 1000
+
+#: ``POST /query`` error mapping: exception type -> (HTTP status, fixed detail).
+#: Checked in order; anything else is not caught (HTTP 500). The detail never
+#: contains the question, a URL or a local path.
+QUERY_ERRORS: tuple[tuple[type[Exception], int, str], ...] = (
+    (RetrievalError, 503, "retrieval unavailable"),
+    (LLMUnavailableError, 503, "LLM server unavailable"),
+    (LLMModelNotFoundError, 503, "LLM model not available"),
+    (LLMResponseError, 502, "invalid response from LLM server"),
+    (LLMTimeoutError, 504, "LLM timed out"),
+)
 
 
 @dataclass(frozen=True)
@@ -193,6 +214,111 @@ class IngestConflictResponse(BaseModel):
 
     detail: str
     active_job: ConflictingJob
+
+
+class QueryRequest(BaseModel):
+    """``POST /query`` body. ``question`` is stripped, then must be 1..1000 characters."""
+
+    question: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_CHARS),
+    ]
+    #: ``None`` uses ``RAG_QUERY_TOP_K``; a strict int (no bool, no string).
+    top_k: Annotated[int, Field(strict=True, ge=MIN_QUERY_TOP_K, le=MAX_QUERY_TOP_K)] | None = (
+        None
+    )
+
+
+class QueryCitation(BaseModel):
+    """A source the answer cites (``[S<n>]``)."""
+
+    source_number: int
+    doc_id: str
+    filename: str
+    page_number: int
+
+
+class QuerySource(BaseModel):
+    """A retrieved source sent to the LLM (no chunk text)."""
+
+    source_number: int
+    doc_id: str
+    filename: str
+    page_number: int
+    similarity: float
+
+
+class QueryTimings(BaseModel):
+    """LLM timings in seconds; ``None`` when the LLM was not called."""
+
+    total_seconds: float | None
+    load_seconds: float | None
+    prompt_eval_seconds: float | None
+    eval_seconds: float | None
+
+
+class QueryResponse(BaseModel):
+    """``POST /query`` (HTTP 200).
+
+    ``answer`` fails closed: the model text only when ``status`` is
+    ``answered``, the fixed not-found message for ``not_found``, otherwise
+    ``null``. ``citations`` is empty unless ``status`` is ``answered``.
+    """
+
+    status: AnswerStatus
+    answer: str | None
+    citations: list[QueryCitation]
+    sources: list[QuerySource]
+    llm_called: bool
+    top_k: int
+    truncated: bool
+    thinking_leaked: bool
+    timings: QueryTimings
+
+    @classmethod
+    def from_answer(cls, result: RagAnswer) -> QueryResponse:
+        answered = result.status is AnswerStatus.ANSWERED
+        if answered or result.status is AnswerStatus.NOT_FOUND:
+            answer: str | None = result.answer_text
+        else:
+            answer = None
+        citations = [
+            QueryCitation(
+                source_number=c.source_number,
+                doc_id=c.doc_id,
+                filename=c.filename,
+                page_number=c.page_number,
+            )
+            for c in result.citations
+        ] if answered else []
+        sources = [
+            QuerySource(
+                source_number=s.source_number,
+                doc_id=s.doc_id,
+                filename=s.filename,
+                page_number=s.page_number,
+                similarity=s.similarity,
+            )
+            for s in result.sources
+        ]
+        called = result.llm_called
+        timings = QueryTimings(
+            total_seconds=result.total_seconds if called else None,
+            load_seconds=result.load_seconds if called else None,
+            prompt_eval_seconds=result.prompt_eval_seconds if called else None,
+            eval_seconds=result.eval_seconds if called else None,
+        )
+        return cls(
+            status=result.status,
+            answer=answer,
+            citations=citations,
+            sources=sources,
+            llm_called=called,
+            top_k=result.top_k,
+            truncated=result.truncated,
+            thinking_leaked=result.thinking_leaked,
+            timings=timings,
+        )
 
 
 class JobResponse(BaseModel):
@@ -368,6 +494,37 @@ def ingest_file(
     )
 
 
+def query(body: QueryRequest, request: Request) -> QueryResponse:
+    """Answer a question from the ``done`` documents, with citations.
+
+    Uses the shared Ollama client. Known failures map to fixed messages
+    (:data:`QUERY_ERRORS`); the question is never logged or echoed.
+    """
+    state = get_api_state(request)
+    try:
+        result = answer_question(
+            body.question,
+            state.retrieval_context,
+            state.settings,
+            top_k=body.top_k,
+            chat_fn=functools.partial(chat, client=state.http_client),
+        )
+    except Exception as exc:
+        for error_type, status_code, detail in QUERY_ERRORS:
+            if isinstance(exc, error_type):
+                logger.warning("Query failed: %s -> HTTP %d", type(exc).__name__, status_code)
+                raise HTTPException(status_code=status_code, detail=detail) from exc
+        raise
+    logger.info(
+        "Query: status=%s, top_k=%d, llm_called=%s, total %.2f s",
+        result.status.value,
+        result.top_k,
+        result.llm_called,
+        result.total_seconds,
+    )
+    return QueryResponse.from_answer(result)
+
+
 def job_status(job_id: str, request: Request) -> JobResponse:
     """One job by id; 404 for an unknown or malformed id (not 32 lowercase hex)."""
     if JOB_ID_PATTERN.fullmatch(job_id) is None:
@@ -469,5 +626,16 @@ def create_app(
         methods=["GET"],
         response_model=JobResponse,
         responses={404: {"model": ErrorResponse, "description": "Unknown or malformed job id"}},
+    )
+    app.add_api_route(
+        "/query",
+        query,
+        methods=["POST"],
+        response_model=QueryResponse,
+        responses={
+            502: {"model": ErrorResponse, "description": "Invalid response from the LLM server"},
+            503: {"model": ErrorResponse, "description": "Retrieval or LLM unavailable"},
+            504: {"model": ErrorResponse, "description": "The LLM timed out"},
+        },
     )
     return app
