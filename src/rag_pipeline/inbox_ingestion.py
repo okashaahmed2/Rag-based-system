@@ -18,6 +18,11 @@ permission problem) is simply retried on the next run, without re-ingesting.
 Files are never overwritten and never deleted: :func:`safe_move` picks the
 first free name ("name.pdf", "name (1).pdf", "name (2).pdf", ...) and uses a
 rename that refuses to replace an existing file.
+
+:func:`ingest_one_file` does the same for one named inbox file (``POST
+/ingest``): :func:`ingest_document` applies the same skip rules as the scan's
+known ids (done, needs_ocr, processing, failed with attempts exhausted ->
+``skipped``), then the file is placed by status exactly as above.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from rag_pipeline.inbox import ScannedFile, ScanStatus, scan_inbox
+from rag_pipeline.inbox import ScanStatus, scan_inbox
 from rag_pipeline.ingestion import IngestContext, IngestResult, ingest_document
 from rag_pipeline.preparation import LOG_DOC_ID_CHARS
 from rag_pipeline.status_db import DocumentRecord, DocumentStatus
@@ -76,7 +81,7 @@ class MoveFailure:
 
 @dataclass(frozen=True)
 class InboxRunReport:
-    """Everything one :func:`ingest_inbox` run did."""
+    """Everything one :func:`ingest_inbox` (or :func:`ingest_one_file`) run did."""
 
     ingest_results: tuple[IngestResult, ...]
     moves: tuple[FileMove, ...]
@@ -145,39 +150,49 @@ def safe_move(source: Path, dest_dir: Path) -> Path:
     raise OSError(f"No free name for {source.name} in {dest_dir} up to ({MAX_NAME_SUFFIX})")
 
 
+def _destination_folders(
+    inbox_dir: Path, processed_dir: Path, failed_dir: Path, needs_ocr_dir: Path
+) -> DestinationFolders:
+    """The destination folders; raise ValueError if one of them is the inbox."""
+    for folder in (processed_dir, failed_dir, needs_ocr_dir):
+        if folder.resolve() == inbox_dir.resolve():
+            raise ValueError(f"Destination folder {folder} must not be the inbox")
+    return DestinationFolders(processed_dir, failed_dir, needs_ocr_dir)
+
+
 def _place(
-    scanned: ScannedFile,
+    path: Path,
+    doc_id: str,
     context: IngestContext,
     folders: DestinationFolders,
     moves: list[FileMove],
     left: list[LeftInInbox],
     failures: list[MoveFailure],
 ) -> None:
-    """Move one scanned file according to its document's status (or leave it)."""
-    doc_id = scanned.doc_id or ""
+    """Move one inbox file according to its document's status (or leave it)."""
     record = context.store.get_document(doc_id)
     dest_dir = destination_for(record, context.max_ingest_attempts, folders)
     if dest_dir is None:
         reason = REASON_NOT_REGISTERED if record is None else record.status.value
         if record is not None and record.status is DocumentStatus.FAILED:
             reason = f"failed, attempts {record.attempts} of {context.max_ingest_attempts}"
-        left.append(LeftInInbox(scanned.path, reason))
+        left.append(LeftInInbox(path, reason))
         return
     try:
-        new_path = safe_move(scanned.path, dest_dir)
+        new_path = safe_move(path, dest_dir)
     except OSError as exc:
         message = f"{type(exc).__name__}: {exc}"
         logger.warning(
             "Could not move %s (%s) to %s, it stays in the inbox and is retried next run: %s",
-            scanned.filename,
+            path.name,
             doc_id[:LOG_DOC_ID_CHARS],
             dest_dir,
             message,
         )
-        failures.append(MoveFailure(scanned.path, dest_dir, message))
+        failures.append(MoveFailure(path, dest_dir, message))
         return
-    logger.info("Moved %s -> %s", scanned.path, new_path)
-    moves.append(FileMove(scanned.path, new_path))
+    logger.info("Moved %s -> %s", path, new_path)
+    moves.append(FileMove(path, new_path))
 
 
 def ingest_inbox(
@@ -198,10 +213,7 @@ def ingest_inbox(
         InboxScanError: the inbox is missing or cannot be listed.
         StatusStoreError: the status store failed (as in ingestion).
     """
-    folders = DestinationFolders(processed_dir, failed_dir, needs_ocr_dir)
-    for folder in (processed_dir, failed_dir, needs_ocr_dir):
-        if folder.resolve() == inbox_dir.resolve():
-            raise ValueError(f"Destination folder {folder} must not be the inbox")
+    folders = _destination_folders(inbox_dir, processed_dir, failed_dir, needs_ocr_dir)
 
     known = context.store.known_doc_ids(context.max_ingest_attempts)
     scan = scan_inbox(inbox_dir, known_doc_ids=known)
@@ -214,7 +226,7 @@ def ingest_inbox(
     for scanned in scan.files:
         if scanned.status is ScanStatus.ERROR or scanned.doc_id is None:
             continue
-        _place(scanned, context, folders, moves, left, failures)
+        _place(scanned.path, scanned.doc_id, context, folders, moves, left, failures)
     scan_errors = tuple(
         LeftInInbox(file.path, f"scan error: {file.error}") for file in scan.errors
     )
@@ -237,5 +249,58 @@ def ingest_inbox(
         len(report.left_in_inbox),
         len(failures),
         len(scan_errors),
+    )
+    return report
+
+
+def ingest_one_file(
+    context: IngestContext,
+    path: Path,
+    processed_dir: Path,
+    failed_dir: Path,
+    needs_ocr_dir: Path,
+    *,
+    inbox_dir: Path,
+) -> InboxRunReport:
+    """Ingest one inbox file, then place it by status (see the module docstring).
+
+    The file is passed to :func:`ingest_document`, which skips a document that
+    is done, needs_ocr, processing or failed with its attempts exhausted (the
+    same set the scan treats as known). A file that is missing or unreadable
+    at run time is reported as a ``failed`` result (nothing registered,
+    nothing moved), not raised. A failed move is reported in
+    ``move_failures``.
+
+    Raises:
+        ValueError: ``path`` is not directly in ``inbox_dir``, or a
+            destination folder is the inbox itself.
+        StatusStoreError: the status store failed (as in ingestion).
+    """
+    folders = _destination_folders(inbox_dir, processed_dir, failed_dir, needs_ocr_dir)
+    if path.parent.resolve() != inbox_dir.resolve():
+        raise ValueError(f"{path.name} is not directly in the inbox")
+
+    result = ingest_document(path, context)
+
+    moves: list[FileMove] = []
+    left: list[LeftInInbox] = []
+    failures: list[MoveFailure] = []
+    if result.doc_id is not None:
+        _place(path, result.doc_id, context, folders, moves, left, failures)
+
+    report = InboxRunReport(
+        ingest_results=(result,),
+        moves=tuple(moves),
+        left_in_inbox=tuple(left),
+        move_failures=tuple(failures),
+        scan_errors=(),
+    )
+    logger.info(
+        "Single-file run on %s: %s, moved %d, left %d, move failures %d",
+        path.name,
+        result.outcome.value,
+        len(moves),
+        len(left),
+        len(failures),
     )
     return report

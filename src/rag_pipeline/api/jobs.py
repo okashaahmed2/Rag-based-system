@@ -1,10 +1,12 @@
-"""Background job runner for ``POST /ingest/scan`` and its result summary.
+"""Background job runners for ``POST /ingest/scan`` and ``POST /ingest``, and their summary.
 
-:func:`run_job` runs in FastAPI's worker threadpool (it is a plain ``def``
-added with ``BackgroundTasks.add_task``), after the 202 response was sent::
+:func:`run_job` (scan) and :func:`run_ingest_job` (one inbox file) run in
+FastAPI's worker threadpool (plain ``def`` added with
+``BackgroundTasks.add_task``), after the 202 response was sent. Both share
+the same lifecycle and error handling::
 
-    queued -> running -> inbox runner -> succeeded (summary)
-                                      -> failed ("ExceptionType: message")
+    queued -> running -> work (runner) -> succeeded (summary)
+                                       -> failed ("ExceptionType: message")
 
 A failure to record the job's own state (:class:`StatusStoreError` from the
 store) is logged as CRITICAL and never re-raised: there is no caller left to
@@ -24,7 +26,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from rag_pipeline.config import Settings
 from rag_pipeline.inbox_ingestion import InboxRunReport
@@ -35,6 +37,21 @@ logger = logging.getLogger(__name__)
 
 #: ``inbox_runner(context, inbox_dir, processed_dir, failed_dir, needs_ocr_dir)``.
 InboxRunner = Callable[[IngestContext, Path, Path, Path, Path], InboxRunReport]
+
+
+class SingleFileRunner(Protocol):
+    """``single_file_runner(context, path, processed, failed, needs_ocr, *, inbox_dir)``."""
+
+    def __call__(
+        self,
+        context: IngestContext,
+        path: Path,
+        processed_dir: Path,
+        failed_dir: Path,
+        needs_ocr_dir: Path,
+        *,
+        inbox_dir: Path,
+    ) -> InboxRunReport: ...
 
 #: Most per-file entries kept in a summary (``files_truncated`` says if more existed).
 MAX_SUMMARY_FILES = 200
@@ -127,13 +144,18 @@ def _mark_failed(context: IngestContext, job_id: str, message: str) -> None:
         )
 
 
-def run_job(
+def _run_work(
     job_id: str,
     context: IngestContext,
-    settings: Settings,
-    inbox_runner: InboxRunner,
+    label: str,
+    where: str,
+    work: Callable[[], InboxRunReport],
 ) -> None:
-    """Run one scan job to completion; never raises for an ordinary exception."""
+    """The shared job lifecycle: running -> ``work()`` -> succeeded / failed.
+
+    ``label`` names the work in logs ("inbox scan", "ingest"); ``where`` is a
+    folder or file name. Never raises for an ordinary exception.
+    """
     try:
         context.store.mark_job_running(job_id)
     except StatusStoreError as exc:
@@ -141,19 +163,13 @@ def run_job(
         return
 
     started = time.perf_counter()
-    logger.info("Job %s: inbox scan started on %s", job_id, settings.inbox_dir)
+    logger.info("Job %s: %s started on %s", job_id, label, where)
     try:
-        report = inbox_runner(
-            context,
-            settings.inbox_dir,
-            settings.processed_dir,
-            settings.failed_dir,
-            settings.needs_ocr_dir,
-        )
+        report = work()
         summary = summary_from_report(report, time.perf_counter() - started)
     except Exception as exc:  # noqa: BLE001 - recorded as the job's failure
         logger.exception(
-            "Job %s: inbox scan crashed after %.2f s", job_id, time.perf_counter() - started
+            "Job %s: %s crashed after %.2f s", job_id, label, time.perf_counter() - started
         )
         _mark_failed(context, job_id, f"{type(exc).__name__}: {exc}")
         return
@@ -169,4 +185,51 @@ def run_job(
         job_id,
         summary["duration_seconds"],
         summary["outcomes"],
+    )
+
+
+def run_job(
+    job_id: str,
+    context: IngestContext,
+    settings: Settings,
+    inbox_runner: InboxRunner,
+) -> None:
+    """Run one scan job to completion; never raises for an ordinary exception."""
+    _run_work(
+        job_id,
+        context,
+        "inbox scan",
+        str(settings.inbox_dir),
+        lambda: inbox_runner(
+            context,
+            settings.inbox_dir,
+            settings.processed_dir,
+            settings.failed_dir,
+            settings.needs_ocr_dir,
+        ),
+    )
+
+
+def run_ingest_job(
+    job_id: str,
+    context: IngestContext,
+    settings: Settings,
+    single_file_runner: SingleFileRunner,
+    filename: str,
+) -> None:
+    """Run one single-file ingest job (``filename`` in the inbox); never raises for an
+    ordinary exception."""
+    _run_work(
+        job_id,
+        context,
+        "ingest",
+        filename,
+        lambda: single_file_runner(
+            context,
+            settings.inbox_dir / filename,
+            settings.processed_dir,
+            settings.failed_dir,
+            settings.needs_ocr_dir,
+            inbox_dir=settings.inbox_dir,
+        ),
     )

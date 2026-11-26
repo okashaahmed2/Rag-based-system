@@ -1,7 +1,9 @@
-"""FastAPI app factory: lifespan wiring, ``GET /health``, scan jobs.
+"""FastAPI app factory: lifespan wiring, ``GET /health``, scan and ingest jobs.
 
 Routes: ``GET /health``, ``POST /ingest/scan`` (202, starts a background scan
-job or returns the active one) and ``GET /status/{job_id}``.
+job or returns the active one), ``POST /ingest`` (202, ingests one file that
+is already in the inbox; 409 while any job is active) and
+``GET /status/{job_id}``.
 
 Run with::
 
@@ -44,12 +46,18 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from rag_pipeline.api.jobs import InboxRunner, run_job
+from rag_pipeline.api.jobs import InboxRunner, SingleFileRunner, run_ingest_job, run_job
+from rag_pipeline.api.validation import (
+    InboxFilenameError,
+    InboxFileNotFoundError,
+    validate_inbox_filename,
+)
 from rag_pipeline.config import Settings, get_settings
 from rag_pipeline.embeddings import load_embedding_model
-from rag_pipeline.inbox_ingestion import ingest_inbox
+from rag_pipeline.inbox_ingestion import ingest_inbox, ingest_one_file
 from rag_pipeline.ingestion import (
     IngestContext,
     IngestionSetupError,
@@ -83,6 +91,7 @@ HttpClientFactory = Callable[[Settings], httpx.Client]
 #: Job ids made by the store (``uuid4().hex``); anything else is 404 without a lookup.
 JOB_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 JOB_NOT_FOUND = "job not found"
+JOB_CONFLICT = "another job is active; retry when it has finished"
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,7 @@ class ApiState:
     retrieval_context: RetrievalContext
     http_client: httpx.Client
     inbox_runner: InboxRunner
+    single_file_runner: SingleFileRunner
 
 
 # --- response models -------------------------------------------------------------
@@ -151,6 +161,38 @@ class ScanResponse(BaseModel):
     kind: JobKind
     status: JobStatus
     already_running: bool
+
+
+class IngestRequest(BaseModel):
+    """``POST /ingest`` body: the name of a PDF already in the inbox (no folders)."""
+
+    filename: str
+
+
+class IngestResponse(BaseModel):
+    """``POST /ingest`` (HTTP 202): the new single-file ingest job."""
+
+    job_id: str
+    kind: JobKind
+    target: str
+    status: JobStatus
+    already_running: bool
+
+
+class ConflictingJob(BaseModel):
+    """The active job that blocks a new ``POST /ingest``."""
+
+    job_id: str
+    kind: JobKind
+    status: JobStatus
+    target: str | None
+
+
+class IngestConflictResponse(BaseModel):
+    """``POST /ingest`` (HTTP 409): a job is active, nothing was started."""
+
+    detail: str
+    active_job: ConflictingJob
 
 
 class JobResponse(BaseModel):
@@ -281,6 +323,51 @@ def ingest_scan(request: Request, background_tasks: BackgroundTasks) -> ScanResp
     )
 
 
+def ingest_file(
+    body: IngestRequest, request: Request, background_tasks: BackgroundTasks
+) -> IngestResponse | JSONResponse:
+    """Ingest one PDF that is already in the inbox, in the background.
+
+    The name is validated before any job is created: 422 for a bad name, 404
+    if no such regular file is directly in the inbox. If any job is active,
+    409 with that job and nothing is started; otherwise 202 with the new job.
+    """
+    state = get_api_state(request)
+    try:
+        path = validate_inbox_filename(body.filename, state.settings.inbox_dir)
+    except InboxFilenameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InboxFileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    job, created = state.ingest_context.store.create_job_or_get_active(
+        JobKind.INGEST, target=path.name
+    )
+    if not created:
+        conflict = IngestConflictResponse(
+            detail=JOB_CONFLICT,
+            active_job=ConflictingJob(
+                job_id=job.job_id, kind=job.kind, status=job.status, target=job.target
+            ),
+        )
+        return JSONResponse(status_code=409, content=conflict.model_dump(mode="json"))
+    background_tasks.add_task(
+        run_ingest_job,
+        job.job_id,
+        state.ingest_context,
+        state.settings,
+        state.single_file_runner,
+        path.name,
+    )
+    return IngestResponse(
+        job_id=job.job_id,
+        kind=job.kind,
+        target=path.name,
+        status=job.status,
+        already_running=False,
+    )
+
+
 def job_status(job_id: str, request: Request) -> JobResponse:
     """One job by id; 404 for an unknown or malformed id (not 32 lowercase hex)."""
     if JOB_ID_PATTERN.fullmatch(job_id) is None:
@@ -300,6 +387,7 @@ def create_app(
     model_loader: ModelLoader = load_embedding_model,
     http_client_factory: HttpClientFactory | None = None,
     inbox_runner: InboxRunner = ingest_inbox,
+    single_file_runner: SingleFileRunner = ingest_one_file,
     configure_logging: bool = True,
 ) -> FastAPI:
     """Build the FastAPI app; the pipeline is wired in its lifespan (see module docs).
@@ -310,6 +398,7 @@ def create_app(
         http_client_factory: Builds the shared Ollama client; ``None`` means
             :func:`default_http_client`.
         inbox_runner: What a scan job runs (tests inject a fake).
+        single_file_runner: What a ``POST /ingest`` job runs (tests inject a fake).
         configure_logging: Call :func:`setup_logging` at startup (tests pass
             ``False`` to keep pytest's logging untouched).
     """
@@ -340,6 +429,7 @@ def create_app(
             retrieval_context=retrieval_context_from(ingest_context),
             http_client=http_client,
             inbox_runner=inbox_runner,
+            single_file_runner=single_file_runner,
         )
         logger.info(
             "API ready in %.2f s (embedding model %s, collection %s)",
@@ -361,6 +451,17 @@ def create_app(
         methods=["POST"],
         status_code=202,
         response_model=ScanResponse,
+    )
+    app.add_api_route(
+        "/ingest",
+        ingest_file,
+        methods=["POST"],
+        status_code=202,
+        response_model=IngestResponse,
+        responses={
+            404: {"model": ErrorResponse, "description": "No such file in the inbox"},
+            409: {"model": IngestConflictResponse, "description": "Another job is active"},
+        },
     )
     app.add_api_route(
         "/status/{job_id}",
