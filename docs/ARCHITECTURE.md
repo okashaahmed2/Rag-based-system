@@ -177,7 +177,7 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 ## Answering (Phase 7)
 - LLM: Ollama at http://127.0.0.1:11434 (not localhost: Windows resolves
   localhost to ::1 first, Ollama listens on IPv4 only, ~2.2 s per connection),
-  model llama3.2:3b (Q4_K_M, 2.0 GB), CPU only.
+  model llama3.2:3b (Q4_K_M, 2.0 GB), GPU (CUDA), CPU fallback.
 - llm.chat: POST /api/chat, stream false, think false, temperature 0,
   num_ctx 4096, num_predict 256, timeout 120 s. Errors: LLMUnavailableError,
   LLMModelNotFoundError (404), LLMTimeoutError, LLMResponseError. Reasoning
@@ -201,6 +201,8 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 - Latency (golden set, llama3.2:3b, CPU): median ~7.5-8 s; prompt eval
   ~118-125 tok/s (about 1 s per 120-token chunk), generation ~19 tok/s;
   model load 2-35 s on a cold start.
+- GPU (GTX 1080 Ti, from 2026-11-27): median ~0.96 s, prompt eval ~2580 tok/s,
+  generation ~94 tok/s.
 
 ## API (Phase 8)
 - App factory: rag_pipeline.api.app:create_app, run with
@@ -244,4 +246,4 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
 
 ## Local services
 n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama 127.0.0.1:11434
-(runs on CPU: CUDA_VISIBLE_DEVICES=-1 until the NVIDIA driver upgrade)
+(runs on the GTX 1080 Ti via CUDA)

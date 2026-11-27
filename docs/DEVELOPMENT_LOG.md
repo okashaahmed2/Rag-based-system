@@ -409,3 +409,14 @@
   (expected) + p.5 in 6.0 s; q14 (negative) not_found 4.4 s; q03 not_found
   6.9 s (same miss as Phase 7). The ~25-49 s startups seen earlier happened only
   inside Claude Code processes (cause unknown). Phase 8 complete.
+
+## 2026-11-27 — GPU step
+- G0 (read-only): CPU baseline on Ollama 0.40.18: 10/13, 2/2, median 7.85 s
+  (matches Phase 7); the second back-to-back run hit Ollama's prompt cache
+  (prompt eval ~0.06 s), so only uncached runs are compared.
+- Driver 566.36 -> 582.78 (R580 GeForce Security Update, clean install).
+- First G2 attempt stopped correctly: CUDA_VISIBLE_DEVICES was removed but the
+  Ollama server started before the change still ran on CPU; fixed by a reboot.
+- G2: library=CUDA, 29/29 layers on GPU, 100% GPU; median 7.85 s -> 0.96 s,
+  prompt eval ~17x, generation ~5x; statuses and citation hits identical to CPU.
+  Pre-registered rule 4/4 PASS -> GPU kept.

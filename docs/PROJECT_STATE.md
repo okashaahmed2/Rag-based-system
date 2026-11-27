@@ -54,6 +54,9 @@
   (commit 0ee831e)
 - Phase 8 Step 6 (manual end-to-end from the user's terminal): COMPLETE (2026-11-27)
 - Phase 8 (FastAPI backend): COMPLETE
+- GPU step (between Phase 8 and 9): COMPLETE (2026-11-27): G0 CPU baseline,
+  NVIDIA driver 582.78, CUDA_VISIBLE_DEVICES removed, G2 pre-registered rule
+  4/4 PASS
 - Next: see Next precise task
 
 ## Verified (with evidence)
@@ -389,6 +392,14 @@
   CPU): startup 5.92 s; scan 2.05 s (done 4, failed 2, needs_ocr 1; 86 chunks);
   q06 answered "Outlook ... 0.246" citing Lecture07 p.9 (expected) + p.5, 6.0 s;
   q14 (negative) not_found 4.4 s; q03 not_found 6.9 s (same miss as Phase 7)
+- G0 CPU baseline (Ollama 0.40.18, llama3.2:3b, 100% CPU, uncached run):
+  10/13 answered+hit, negatives 2/2, 0 errors/truncated, median wall 7.85 s,
+  max 10.94 s, prompt eval ~153 tok/s, generation ~18 tok/s, cold load 22.4 s
+- G2 GPU (driver 582.78, server.log: library=CUDA compute=6.1, cuda_v12
+  backend, 29/29 layers offloaded, ollama ps 100% GPU, ~2.9 GB VRAM): uncached
+  run 10/13, 2/2, 0 errors/truncated, median wall 0.96 s, max 2.46 s (q01, first
+  question incl. warm-up), prompt eval ~2580 tok/s, generation ~94 tok/s;
+  no status or citation-hit change vs CPU (q04 43 vs 47 completion tokens)
 - 1237 pytest tests passing
 
 ## Not yet verified / incomplete
@@ -424,7 +435,9 @@
   automatically; manual review only
 - llama3.2:3b on documents or questions beyond the 15-question golden set
 - n8n -> FastAPI latency with "localhost" (Phase 9)
-- Ollama on the GTX 1080 Ti GPU (needs NVIDIA driver >= 570; installed 566.36)
+- GPU cold load time (only a 40.17 s first /api/generate including the load
+  was seen)
+- Ollama total duration per question (rag_smoke.py does not print it)
 - Concurrent encode under load (only 3 queries during one scan tested)
 - Real n8n calls (Phase 9)
 - Cause of the ~25-49 s startups seen only inside Claude Code processes
@@ -731,13 +744,19 @@
   note "not HF_HUB_OFFLINE" no longer holds alone)
 - Routes via app.add_api_route (FastAPI 0.165 _IncludedRouter observation by
   Claude Code, not independently verified)
-- GPU: Ollama forced to CPU with user env var CUDA_VISIBLE_DEVICES=-1
-  (2026-11-27) until the NVIDIA driver is upgraded; embeddings stay on CPU
-  (torch +cpu)
+- GPU: Ollama runs llama3.2:3b on the GTX 1080 Ti via CUDA (cuda_v12 runner);
+  driver 582.78 (R580 GeForce Security Update, chosen over Studio 581.57: newer,
+  security fixes); embeddings stay on CPU (torch +cpu). Kept by the
+  pre-registered rule (0 errors/truncated, negatives 2/2, answered+hit >= 10/13,
+  median < 7.85 s): 4/4 PASS. Rollback: User variable CUDA_VISIBLE_DEVICES=-1
+  + full Ollama restart.
 - Lessons: commit after every verified step and update docs at session end (a
   Claude Code session was deleted on 2026-11-27; nothing lost); change one thing
   at a time (driver upgrade deferred); Phase 4's "no network" check missed the
-  HF header path; Ollama auto-updates on Windows (0.40.17 -> 0.40.18)
+  HF header path; Ollama auto-updates on Windows (0.40.17 -> 0.40.18); an
+  environment-variable change needs a full Ollama server restart (reboot is
+  simplest); Ollama's prompt cache makes back-to-back benchmark runs
+  misleading, compare uncached run against uncached run
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -761,14 +780,13 @@ tokenizers 0.23.3 | huggingface-hub 2.4.0 | chromadb 1.5.9 |
 git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2 | httpx 0.28.1 |
 Ollama 0.40.18 (auto-updated from 0.40.17) | llama3.2:3b | granite4.2:3b (rejected) |
 fastapi 0.165.0 | starlette 1.10.0 | uvicorn 0.54.0 (declared >=0.54,<1) |
-anyio 4.16.0 | httpx2 2.16.2 (via huggingface_hub) | NVIDIA driver 566.36
+anyio 4.16.0 | httpx2 2.16.2 (via huggingface_hub) | NVIDIA driver 582.78 (was 566.36)
 
 ## Hardware (verified)
 Intel Core i5-14400F (10C/16T), 15.8 GB RAM (2 x 8 GB DDR4-3200, dual channel; 5.99-6.82 GB free with
 Chrome + VS Code open),
 NVIDIA GeForce GTX 1080 Ti 11 GB (Pascal, compute 6.1), installed 2026-11-27,
-driver 566.36 (CUDA 12.7) — below Ollama's 570 minimum for compute 5.0-6.2;
-LLM currently forced to CPU,
+driver 582.78 (R580, reports CUDA 13.0); LLM on GPU,
 Windows 11, PowerShell 5.1
 
 ## Risks
@@ -864,10 +882,13 @@ Windows 11, PowerShell 5.1
 - llama3.2:3b license: Llama 3.2 Community License ("Built with Llama" in the
   README, Phase 14)
 - Ollama auto-update can change behaviour (0.40.18 started using CUDA)
-- CUDA_VISIBLE_DEVICES=-1 is a user-level variable: it also hides the GPU from
-  other CUDA apps; must be removed for the GPU step
 - NVIDIA R580 is the last driver branch for Pascal (GTX 10); 590+ does not
   support the 1080 Ti
+- CUDA 13 dropped pre-Turing GPUs; a future Ollama version may drop the
+  CUDA 12 runner and fall back to CPU (check ollama ps after auto-updates;
+  CPU path stays documented)
+- OLLAMA_VULKAN is true in the server config; CUDA was chosen (check
+  server.log library= after updates)
 - Jobs table grows without cleanup; /health 500 if Chroma/SQLite fail; /health
   shows the Ollama URL/OS error text; RAG_API_HOST accepts 0.0.0.0 (Phase 12)
 - Absolute paths still appear in logs and in the documents table error_message
@@ -877,11 +898,6 @@ Windows 11, PowerShell 5.1
 - File replaced between /ingest validation and the job -> new bytes ingested
 
 ## Next precise task
-Choose at the start of the next session:
-(A) GPU step: install the latest NVIDIA R580-branch driver for the GTX 1080 Ti,
-remove CUDA_VISIBLE_DEVICES, restart Ollama, confirm `ollama ps` shows GPU,
-rerun llm_smoke + rag_smoke, compare latency with CPU (median ~8 s Phase 7,
-4.4-6.9 s Step 6).
-(B) Phase 9 Step 0: n8n basics + read-only check (n8n 2.14.2 via npm, port
-5678, Schedule Trigger -> POST /ingest/scan -> poll /status), live data paths
-decision (data/inbox, data/chroma, data/status.db are still unused).
+Phase 9 Step 0: n8n basics + read-only check (n8n 2.14.2 via npm, port 5678,
+Schedule Trigger -> POST /ingest/scan -> poll /status), live data paths
+decision (data/inbox, data/chroma, data/status.db still unused).
