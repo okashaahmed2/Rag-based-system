@@ -28,6 +28,8 @@ data/needs_ocr/*
 data/chroma/
 # Evaluation corpus copy + per-config eval stores (results in eval/results/ ARE tracked)
 data/eval/
+# Staging runs of the API (scripts/run_api_staging.py): inbox copies, stores, databases
+data/staging/
 *.db
 *.db-journal
 *.db-wal
