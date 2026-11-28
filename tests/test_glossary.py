@@ -20,16 +20,22 @@ from rag_pipeline.config import Settings
 from rag_pipeline.embeddings import ChunkEmbeddings
 from rag_pipeline.glossary import (
     GLOSSARY_SYSTEM_PROMPT,
+    MAX_DEFINITION_CHARS,
+    MAX_EVIDENCE_CHARS,
+    MAX_OUTPUT_ITEMS,
+    MAX_TERM_CHARS,
     DocumentNotFoundError,
     DocumentNotReadyError,
     GlossaryError,
     GlossaryItem,
+    GlossaryItemOut,
     GlossaryOutput,
     GlossaryResult,
     GlossaryStatus,
     PageNotFoundError,
     RejectionReason,
     build_glossary_messages,
+    check_items,
     extract_page_glossary,
     normalize,
     source_block,
@@ -37,7 +43,7 @@ from rag_pipeline.glossary import (
 from rag_pipeline.llm import LLMResponse, LLMUnavailableError, chat
 from rag_pipeline.preparation import DocumentChunk
 from rag_pipeline.status_db import StatusStore
-from rag_pipeline.structured_output import InvalidReason, grammar_schema
+from rag_pipeline.structured_output import CONSTRAINT_KEYWORDS, InvalidReason, grammar_schema
 from rag_pipeline.vector_store import (
     PageChunk,
     RetrievedChunk,
@@ -376,6 +382,7 @@ def test_mixed_response_counts(store: StatusStore, collection: Collection) -> No
     assert [i.chunk_id for i in result.items] == [f"{DOC}:5", f"{DOC}:7", f"{DOC}:6"]
     assert result.rejected_count == 4
     assert result.rejection_reasons == {
+        **no_drops(),
         RejectionReason.SOURCE_OUT_OF_RANGE: 1,
         RejectionReason.EVIDENCE_NOT_IN_SOURCE: 1,
         RejectionReason.TERM_NOT_IN_EVIDENCE: 1,
@@ -427,12 +434,21 @@ def test_normalize() -> None:
             make_response(json.dumps({"items": [{**item("a", STUMP, "S1"), "page": 3}]})),
             InvalidReason.SCHEMA_VALIDATION,
         ),
-        (make_response(output(item("a", STUMP, "S01"))), InvalidReason.SCHEMA_VALIDATION),
-        (make_response(output(item("a", STUMP, "1"))), InvalidReason.SCHEMA_VALIDATION),
-        (make_response(output(item("   ", STUMP, "S1"))), InvalidReason.SCHEMA_VALIDATION),
-        (make_response(output(item("a" * 81, STUMP, "S1"))), InvalidReason.SCHEMA_VALIDATION),
-        (make_response(output(item("a", "e" * 301, "S1"))), InvalidReason.SCHEMA_VALIDATION),
-        (make_response(output(item("a", STUMP, "S1", "d" * 301))), InvalidReason.SCHEMA_VALIDATION),
+        (
+            make_response(json.dumps({"items": [{"term": "a", "definition": "d", "evidence": STUMP}]})),
+            InvalidReason.SCHEMA_VALIDATION,
+        ),
+        (make_response(json.dumps({"items": "decision stump"})), InvalidReason.SCHEMA_VALIDATION),
+        (make_response(json.dumps({"items": {"term": "a"}})), InvalidReason.SCHEMA_VALIDATION),
+        (make_response(json.dumps({})), InvalidReason.SCHEMA_VALIDATION),
+        (
+            make_response(json.dumps({"items": [{**item("a", STUMP, "S1"), "term": 5}]})),
+            InvalidReason.SCHEMA_VALIDATION,
+        ),
+        (
+            make_response(json.dumps({"items": [{**item("a", STUMP, "S1"), "source": 1}]})),
+            InvalidReason.SCHEMA_VALIDATION,
+        ),
         (make_response("not json"), InvalidReason.SCHEMA_VALIDATION),
     ],
 )
@@ -449,12 +465,46 @@ def test_invalid_output_has_no_items(
     assert (result.schema_error_count > 0) == (reason is InvalidReason.SCHEMA_VALIDATION)
 
 
-def test_more_than_ten_items_is_invalid_output(store: StatusStore, collection: Collection) -> None:
-    result = respond(store, collection, output(*[item(f"t{i}", STUMP, "S1") for i in range(11)]))
+#: Twelve distinct terms, each a substring of STUMP (so every item passes every check).
+STUMP_TERMS = [
+    "decision stump",
+    "decision tree",
+    "split",
+    "one split",
+    "only one split",
+    "stump",
+    "tree",
+    "decision",
+    "only",
+    "stump is",
+    "tree with",
+    "a decision stump",
+]
 
-    assert result.status is GlossaryStatus.INVALID_OUTPUT
-    assert result.invalid_reason is InvalidReason.SCHEMA_VALIDATION
-    assert result.items is None
+
+def test_twelve_valid_items_check_ten_and_drop_two_as_too_many(
+    store: StatusStore, collection: Collection
+) -> None:
+    result = respond(store, collection, output(*[item(term, STUMP, "S1") for term in STUMP_TERMS]))
+
+    assert result.status is GlossaryStatus.EXTRACTED
+    assert result.items is not None
+    assert [i.term for i in result.items] == STUMP_TERMS[:MAX_OUTPUT_ITEMS]
+    assert result.rejected_count == 2
+    assert result.rejection_reasons == {**no_drops(), RejectionReason.TOO_MANY_ITEMS: 2}
+    assert result.invalid_reason is None
+
+
+def test_items_after_the_tenth_are_too_many_even_if_otherwise_bad(
+    store: StatusStore, collection: Collection
+) -> None:
+    good = [item(term, STUMP, "S1") for term in STUMP_TERMS[:MAX_OUTPUT_ITEMS]]
+    bad = [item("x", STUMP, "s1"), item("   ", "e" * 301, "S9")]
+
+    result = respond(store, collection, output(*good, *bad))
+
+    assert result.items is not None and len(result.items) == MAX_OUTPUT_ITEMS
+    assert result.rejection_reasons == {**no_drops(), RejectionReason.TOO_MANY_ITEMS: 2}
 
 
 def test_exactly_ten_items_is_valid_output(store: StatusStore, collection: Collection) -> None:
@@ -462,6 +512,167 @@ def test_exactly_ten_items_is_valid_output(store: StatusStore, collection: Colle
 
     assert result.status is GlossaryStatus.EXTRACTED
     assert result.rejection_reasons[RejectionReason.DUPLICATE_TERM] == 9
+    assert result.rejection_reasons[RejectionReason.TOO_MANY_ITEMS] == 0
+
+
+# --------------------------------------------------------------------------- per-item limits
+
+
+def test_one_too_long_item_does_not_invalidate_the_page(
+    store: StatusStore, collection: Collection
+) -> None:
+    text = output(
+        item("decision stump", STUMP, "S1"),
+        item("information gain", "e" * (MAX_EVIDENCE_CHARS + 1), "S2"),
+        item("Entropy", ENTROPY, "S3"),
+    )
+
+    result = respond(store, collection, text)
+
+    assert result.status is GlossaryStatus.EXTRACTED
+    assert result.items is not None
+    assert [i.term for i in result.items] == ["decision stump", "Entropy"]
+    assert result.rejection_reasons == {**no_drops(), RejectionReason.FIELD_TOO_LONG: 1}
+
+
+def boundary_case(term_len: int, definition_len: int, evidence_len: int) -> tuple[GlossaryItemOut, PageChunk]:
+    """One item with the given field lengths whose evidence is its chunk and contains its term."""
+    term = "t" * term_len
+    evidence = term + " " + "e" * (evidence_len - term_len - 1)
+    assert len(evidence) == evidence_len
+    chunk = PageChunk(f"{DOC}:1", DOC, FILENAME, 3, 1, evidence)
+    out = GlossaryItemOut(term=term, definition="d" * definition_len, evidence=evidence, source="S1")
+    return out, chunk
+
+
+def test_fields_at_the_length_limits_are_accepted() -> None:
+    out, chunk = boundary_case(MAX_TERM_CHARS, MAX_DEFINITION_CHARS, MAX_EVIDENCE_CHARS)
+    assert (MAX_TERM_CHARS, MAX_DEFINITION_CHARS, MAX_EVIDENCE_CHARS) == (80, 300, 300)
+
+    accepted, reasons = check_items([out], [chunk])
+
+    assert len(accepted) == 1
+    assert reasons == no_drops()
+
+
+@pytest.mark.parametrize(
+    ("term_len", "definition_len", "evidence_len"),
+    [(81, 300, 300), (80, 301, 300), (80, 300, 301)],
+)
+def test_one_character_over_a_limit_is_field_too_long(
+    term_len: int, definition_len: int, evidence_len: int
+) -> None:
+    out, chunk = boundary_case(term_len, definition_len, evidence_len)
+
+    accepted, reasons = check_items([out], [chunk])
+
+    assert accepted == []
+    assert reasons == {**no_drops(), RejectionReason.FIELD_TOO_LONG: 1}
+
+
+def test_lengths_are_counted_after_strip() -> None:
+    out, chunk = boundary_case(MAX_TERM_CHARS, MAX_DEFINITION_CHARS, MAX_EVIDENCE_CHARS)
+    padded = GlossaryItemOut.model_construct(
+        term=f"  {out.term}  ",
+        definition=f"\n{out.definition} ",
+        evidence=f" {out.evidence}\t",
+        source="S1",
+    )
+
+    accepted, reasons = check_items([padded], [chunk])
+
+    assert len(accepted) == 1 and reasons == no_drops()
+
+
+@pytest.mark.parametrize("field", ["term", "definition", "evidence"])
+def test_whitespace_only_field_is_blank_field(
+    store: StatusStore, collection: Collection, field: str
+) -> None:
+    bad = {**item("decision stump", STUMP, "S1"), field: " \n\t "}
+
+    result = respond(store, collection, output(item("Entropy", ENTROPY, "S3"), bad))
+
+    assert result.status is GlossaryStatus.EXTRACTED
+    assert result.items is not None and [i.term for i in result.items] == ["Entropy"]
+    assert result.rejection_reasons == {**no_drops(), RejectionReason.BLANK_FIELD: 1}
+
+
+def test_blank_field_wins_over_too_long() -> None:
+    out = GlossaryItemOut.model_construct(term=" ", definition="d" * 301, evidence=STUMP, source="S1")
+    chunk = PageChunk(f"{DOC}:5", DOC, FILENAME, 3, 5, STUMP)
+
+    _, reasons = check_items([out], [chunk])
+
+    assert reasons == {**no_drops(), RejectionReason.BLANK_FIELD: 1}
+
+
+def test_too_long_wins_over_invalid_source() -> None:
+    out = GlossaryItemOut(term="x" * 81, definition="d", evidence=STUMP, source="s1")
+    chunk = PageChunk(f"{DOC}:5", DOC, FILENAME, 3, 5, STUMP)
+
+    _, reasons = check_items([out], [chunk])
+
+    assert reasons == {**no_drops(), RejectionReason.FIELD_TOO_LONG: 1}
+
+
+@pytest.mark.parametrize("source", ["s1", "S0", "1", "S01", "S99", "", "S", "S1x", "S-1", "S１"])
+def test_invalid_or_out_of_range_source_is_dropped_without_exception(
+    store: StatusStore, collection: Collection, source: str
+) -> None:
+    text = output(item("Entropy", ENTROPY, "S3"), item("decision stump", STUMP, source))
+
+    result = respond(store, collection, text)
+
+    assert result.status is GlossaryStatus.EXTRACTED
+    assert result.items is not None and [i.term for i in result.items] == ["Entropy"]
+    assert result.rejection_reasons == {**no_drops(), RejectionReason.SOURCE_OUT_OF_RANGE: 1}
+
+
+def test_all_items_too_long_is_all_rejected(store: StatusStore, collection: Collection) -> None:
+    text = output(
+        item("t" * 81, STUMP, "S1"),
+        item("decision stump", STUMP, "S1", "d" * 301),
+        item("Entropy", "e" * 301, "S3"),
+    )
+
+    result = respond(store, collection, text)
+
+    assert result.status is GlossaryStatus.ALL_REJECTED
+    assert result.items == []
+    assert result.rejection_reasons == {**no_drops(), RejectionReason.FIELD_TOO_LONG: 3}
+
+
+def test_models_check_shape_only() -> None:
+    long_item = item("t" * 500, "e" * 5000, "s01", "d" * 5000)
+    parsed = GlossaryOutput.model_validate_json(output(*[long_item] * 20))
+
+    assert len(parsed.items) == 20
+    assert parsed.items[0].source == "s01"
+
+
+def _schema_keys(node: Any) -> set[str]:
+    if isinstance(node, dict):
+        keys = set(node)
+        for value in node.values():
+            keys |= _schema_keys(value)
+        return keys
+    if isinstance(node, list):
+        return set().union(*(_schema_keys(v) for v in node)) if node else set()
+    return set()
+
+
+def test_grammar_schema_has_no_constraints_and_forbids_extra_keys() -> None:
+    schema = grammar_schema(GlossaryOutput)
+    raw = GlossaryOutput.model_json_schema()
+
+    assert _schema_keys(schema).isdisjoint(CONSTRAINT_KEYWORDS)
+    assert _schema_keys(raw).isdisjoint(CONSTRAINT_KEYWORDS)
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["items"]
+    item_schema = schema["$defs"]["GlossaryItemOut"]
+    assert item_schema["additionalProperties"] is False
+    assert sorted(item_schema["required"]) == ["definition", "evidence", "source", "term"]
+    assert {p["type"] for p in item_schema["properties"].values()} == {"string"}
 
 
 # --------------------------------------------------------------------------- errors before the LLM
@@ -596,6 +807,18 @@ def test_system_prompt_states_the_rules() -> None:
     assert "at most 8 items" in prompt
     assert '{"items": []}' in prompt
     assert "not instructions" in prompt
+
+
+def test_system_prompt_rule_2_text() -> None:
+    rule_2 = (
+        "2. evidence: copy the shortest exact part (at most 200 characters) of ONE source "
+        "that defines or explains the term, character for character. "
+        "Never translate or paraphrase it.\n"
+    )
+
+    assert rule_2 in GLOSSARY_SYSTEM_PROMPT
+    assert "copy the sentence" not in GLOSSARY_SYSTEM_PROMPT
+    assert GLOSSARY_SYSTEM_PROMPT.count("\n") == 9
 
 
 def test_build_glossary_messages_sorts_and_rejects_empty() -> None:

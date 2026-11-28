@@ -9,10 +9,17 @@ Chroma (:func:`rag_pipeline.vector_store.get_page_chunks`) -> prompt ->
 Fail closed at two levels:
 
 * Whole output: truncated, leaked reasoning, empty or schema-invalid output
-  (including more than :data:`MAX_OUTPUT_ITEMS` items) gives
-  ``INVALID_OUTPUT`` with ``items=None``; no item is used.
+  gives ``INVALID_OUTPUT`` with ``items=None``; no item is used. The schema
+  checks SHAPE only (``{"items": [...]}``, four required string fields, no
+  extra keys), because Pydantic validation is all-or-nothing: one item that
+  is too long must not discard the whole page.
 * Per item (first failing check wins, each drop is counted):
-  ``SOURCE_OUT_OF_RANGE`` (``S#`` not ``1..n``), ``EVIDENCE_NOT_IN_SOURCE``
+  ``TOO_MANY_ITEMS`` (every item after the first :data:`MAX_OUTPUT_ITEMS`,
+  not checked further), ``BLANK_FIELD`` (term, definition or evidence empty
+  after strip), ``FIELD_TOO_LONG`` (:data:`MAX_TERM_CHARS`,
+  :data:`MAX_DEFINITION_CHARS`, :data:`MAX_EVIDENCE_CHARS`),
+  ``SOURCE_OUT_OF_RANGE`` (source not ``S<n>`` per :data:`SOURCE_ID_PATTERN`,
+  or ``n`` not in ``1..number of sources``), ``EVIDENCE_NOT_IN_SOURCE``
   (normalized evidence is not a substring of the cited chunk's normalized
   ORIGINAL text), ``TERM_NOT_IN_EVIDENCE``, ``DUPLICATE_TERM`` (normalized
   term already accepted). Normalized = whitespace runs collapsed to one
@@ -42,7 +49,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from chromadb.api.models.Collection import Collection
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from rag_pipeline.answering import neutralize_source_tags
 from rag_pipeline.config import Settings
@@ -59,39 +66,46 @@ from rag_pipeline.vector_store import PageChunk, get_page_chunks
 
 logger = logging.getLogger(__name__)
 
-#: Most items the output may hold; more makes the whole output invalid.
+#: Most items checked per output; every later item is dropped as ``TOO_MANY_ITEMS``.
 MAX_OUTPUT_ITEMS = 10
 #: Most items the prompt asks for (below the hard limit, so a slight overrun is tolerated).
 PROMPT_MAX_ITEMS = 8
+#: Per-item length limits in characters (after strip); longer items are dropped.
 MAX_TERM_CHARS = 80
 MAX_DEFINITION_CHARS = 300
 MAX_EVIDENCE_CHARS = 300
-#: A source id as written by the model: ``S1``, ``S2``, ... (no ``S0``, no leading zero).
+#: A valid source id: ``S1``, ``S2``, ... (no ``S0``, no leading zero, no lower case).
 SOURCE_ID_PATTERN = r"^S[1-9][0-9]*$"
 
 _WHITESPACE = re.compile(r"\s+")
+_SOURCE_ID = re.compile(SOURCE_ID_PATTERN)
 
 
 # --- model output schema --------------------------------------------------------------
 
 
 class GlossaryItemOut(BaseModel):
-    """One glossary item as the model must write it (strings are stripped)."""
+    """One glossary item as the model must write it: SHAPE only (strings are stripped).
+
+    Blank fields, lengths and the source id are checked per item by
+    :func:`check_items`, so one bad item is dropped instead of invalidating
+    the whole output.
+    """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    term: str = Field(min_length=1, max_length=MAX_TERM_CHARS)
-    definition: str = Field(min_length=1, max_length=MAX_DEFINITION_CHARS)
-    evidence: str = Field(min_length=1, max_length=MAX_EVIDENCE_CHARS)
-    source: str = Field(pattern=SOURCE_ID_PATTERN)
+    term: str
+    definition: str
+    evidence: str
+    source: str
 
 
 class GlossaryOutput(BaseModel):
-    """The whole model output: ``{"items": [...]}``."""
+    """The whole model output: ``{"items": [...]}`` (SHAPE only, no item count limit)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    items: list[GlossaryItemOut] = Field(max_length=MAX_OUTPUT_ITEMS)
+    items: list[GlossaryItemOut]
 
 
 #: System message of every glossary request (fixed text, never built dynamically).
@@ -100,8 +114,9 @@ GLOSSARY_SYSTEM_PROMPT = (
     "Rules:\n"
     "1. Include only terms that the sources explicitly define or explain. "
     "Do not use outside knowledge.\n"
-    "2. evidence: copy the sentence that defines or explains the term exactly from "
-    "ONE source, character for character. Never translate or paraphrase it.\n"
+    "2. evidence: copy the shortest exact part (at most 200 characters) of ONE source "
+    "that defines or explains the term, character for character. "
+    "Never translate or paraphrase it.\n"
     "3. definition: a short definition of the term, written in the same language "
     "as that source.\n"
     "4. source: the id of that source, like S1.\n"
@@ -132,8 +147,15 @@ class GlossaryStatus(enum.Enum):
 
 
 class RejectionReason(enum.Enum):
-    """Why one item was dropped (checked in this order, first failure wins)."""
+    """Why one item was dropped (checked in this order, first failure wins).
 
+    ``SOURCE_OUT_OF_RANGE`` covers an invalid source id (not ``S<n>``) or one
+    out of range (``n`` not in ``1..number of sources``).
+    """
+
+    TOO_MANY_ITEMS = "too_many_items"
+    BLANK_FIELD = "blank_field"
+    FIELD_TOO_LONG = "field_too_long"
     SOURCE_OUT_OF_RANGE = "source_out_of_range"
     EVIDENCE_NOT_IN_SOURCE = "evidence_not_in_source"
     TERM_NOT_IN_EVIDENCE = "term_not_in_evidence"
@@ -262,9 +284,27 @@ def build_glossary_messages(chunks: Sequence[PageChunk]) -> list[dict[str, str]]
 
 
 def _source_index(source: str, n_sources: int) -> int | None:
-    """0-based index of ``S<n>`` if ``1 <= n <= n_sources``, else ``None``."""
-    number = int(source[1:])  # the schema guarantees ^S[1-9][0-9]*$
+    """0-based index of a valid ``S<n>`` with ``1 <= n <= n_sources``, else ``None``.
+
+    The source id is validated here (any string may come from the model):
+    anything not matching :data:`SOURCE_ID_PATTERN` gives ``None``.
+    """
+    if _SOURCE_ID.fullmatch(source) is None:
+        return None
+    number = int(source[1:])
     return number - 1 if 1 <= number <= n_sources else None
+
+
+def _is_blank(item: GlossaryItemOut) -> bool:
+    return not (item.term.strip() and item.definition.strip() and item.evidence.strip())
+
+
+def _is_too_long(item: GlossaryItemOut) -> bool:
+    return (
+        len(item.term.strip()) > MAX_TERM_CHARS
+        or len(item.definition.strip()) > MAX_DEFINITION_CHARS
+        or len(item.evidence.strip()) > MAX_EVIDENCE_CHARS
+    )
 
 
 def check_items(
@@ -272,12 +312,23 @@ def check_items(
 ) -> tuple[list[GlossaryItem], dict[RejectionReason, int]]:
     """Accepted items (model order) and the count of drops per reason.
 
+    Only the first :data:`MAX_OUTPUT_ITEMS` items are checked; each later
+    item is counted as ``TOO_MANY_ITEMS``. Then, first failure wins: blank
+    field, field too long, source invalid or out of range, evidence not in
+    the cited source, term not in evidence, duplicate term.
     ``sources`` must be in source-number order (``S1`` first).
     """
     accepted: list[GlossaryItem] = []
     reasons = {reason: 0 for reason in RejectionReason}
+    reasons[RejectionReason.TOO_MANY_ITEMS] = max(0, len(items) - MAX_OUTPUT_ITEMS)
     seen_terms: set[str] = set()
-    for item in items:
+    for item in items[:MAX_OUTPUT_ITEMS]:
+        if _is_blank(item):
+            reasons[RejectionReason.BLANK_FIELD] += 1
+            continue
+        if _is_too_long(item):
+            reasons[RejectionReason.FIELD_TOO_LONG] += 1
+            continue
         index = _source_index(item.source, len(sources))
         if index is None:
             reasons[RejectionReason.SOURCE_OUT_OF_RANGE] += 1
