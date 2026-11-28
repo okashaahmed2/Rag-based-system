@@ -526,3 +526,8 @@
 - Lesson: temperature 0 is not deterministic on GPU.
 - Lesson: mechanical checks prove the evidence is real page text, not that it
   defines the term.
+
+## 2026-11-28 — Planning (web UI + admin upload)
+- Planning only: web UI (beige + white, query left, admin upload right) and
+  single admin password decided. Upload + admin check go in Phase 12, the UI in
+  Phase 13. Nothing implemented.

@@ -314,6 +314,17 @@ extract_page_glossary(doc_id, page)
 - Not exposed by the API: the glossary failed its pre-registered test
   (2026-11-28). scripts/glossary_smoke.py runs it on the eval store only.
 
+## Planned: web UI and admin upload (not implemented)
+
+```
+Browser UI (static files served by FastAPI)
+  -> POST /query                   (everyone)
+  -> POST /upload + admin password (admin) -> data/inbox -> ingest job
+  -> GET /status/{job_id}, GET /documents
+```
+
+Security is enforced in the backend; the UI only shows or hides controls.
+
 ## Local services
 n8n 127.0.0.1:5678 (npm, listens on ::) | FastAPI 127.0.0.1:8000 | Ollama 127.0.0.1:11434
 (runs on the GTX 1080 Ti via CUDA)

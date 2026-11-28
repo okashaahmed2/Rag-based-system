@@ -925,6 +925,22 @@
   silently; Pydantic validation is all-or-nothing; a dev-set improvement did not
   transfer to new pages; temperature 0 is not deterministic on GPU; mechanical
   checks prove the evidence is real page text, not that it defines the term
+- Web UI PLANNED (Phase 13), not implemented: premium beige + white design,
+  served by FastAPI as static HTML/CSS/JS (no new frontend framework). Left
+  side: query (open to everyone, no password). Right side: PDF upload (admin
+  only) + document list + job progress. The UI is a thin client: it only calls
+  the FastAPI endpoints and never touches ChromaDB, SQLite or files directly.
+- Admin access PLANNED (Phase 12): one shared admin password; no accounts, no
+  usernames, no login page. Rules: only a salted hash is stored in .env (Python
+  stdlib hashlib, no new dependency); the backend checks it on every /upload
+  request (hiding a button is not security); constant-time comparison
+  (hmac.compare_digest); limit on wrong attempts; the password is never logged
+  and never stored in the browser (memory only, re-enter after refresh). Valid
+  for localhost only; HTTPS is required before any network exposure.
+- Upload flow PLANNED: admin uploads a PDF -> /upload validates (password, size
+  limit, real PDF check, safe file name) -> file saved to data/inbox -> existing
+  single-file ingest job -> UI polls /status. n8n keeps scanning data/inbox on
+  its schedule.
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -1078,6 +1094,14 @@ Windows 11, PowerShell 5.1
 - check_items returns a 3-tuple (accepted, reasons, remapped count)
 - scripts/glossary_smoke.py prints page text, terms and definitions to the
   console (manual script; nothing of it is logged)
+
+## Planned roadmap changes
+- Phase 12 adds: admin password check, POST /upload (size limit, PDF
+  magic-bytes check, file name sanitising, python-multipart dependency to be
+  approved then), GET /documents (list from SQLite).
+- Phase 13 adds: the premium web UI described in Key decisions (OCR/Docker stay
+  optional).
+- Phase 14 adds: UI screenshots and a short demo in the README.
 
 ## Next precise task
 Phase 11 Step 0: read-only check for testing and final evaluation metrics
