@@ -329,6 +329,7 @@ def test_run_writes_the_json_file_with_expected_keys(
         "items",
         "rejected_count",
         "rejection_reasons",
+        "source_remapped",
         "invalid_reason",
         "schema_error_count",
         "model",
@@ -352,12 +353,37 @@ def test_run_writes_the_json_file_with_expected_keys(
         }
     ]
     assert run["rejection_reasons"]["term_not_in_evidence"] == 1
+    assert run["source_remapped"] == 0
     assert run["warm_seconds"] == pytest.approx(1.5)
     assert payload["summary"]["status_counts"]["extracted"] == 1
     assert payload["summary"]["warm_seconds_median"] == pytest.approx(1.5)
     printed = capsys.readouterr().out
     assert "term: decision stump" in printed and f"chunk {DOC_A}:2" in printed
     assert "status=extracted sources=1 accepted=1 rejected=1" in printed
+
+
+def test_source_remapped_is_printed_and_written(
+    root: Path, live: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # alpha.pdf p.1: S1 = chunk 0 (LONG_FIRST), S2 = chunk 1. Both items cite S2 but
+    # their evidence is in S1, so both are remapped to chunk 0.
+    reply = json.dumps(
+        {
+            "items": [
+                {"term": "line one", "definition": "d1", "evidence": "Line one line two", "source": "S2"},
+                {"term": "line two", "definition": "d2", "evidence": "line two", "source": "S2"},
+            ]
+        }
+    )
+
+    code = run_main(root, live, ["run", "--page", "ab12cd340:1"], FakeChat(reply))
+
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "status=extracted sources=2 accepted=2 rejected=0 remapped=2 invalid_reason=None" in printed
+    (run,) = json.loads(run_files(root)[0].read_text(encoding="utf-8"))["pages"][0]["runs"]
+    assert run["source_remapped"] == 2
+    assert [item["chunk_id"] for item in run["items"]] == [f"{DOC_A}:0", f"{DOC_A}:0"]
 
 
 def test_repeat_reports_identical_per_page(root: Path, live: Settings) -> None:

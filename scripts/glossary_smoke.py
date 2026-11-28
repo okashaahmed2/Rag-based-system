@@ -269,6 +269,7 @@ def result_record(result: GlossaryResult) -> dict[str, Any]:
         else [dataclasses.asdict(item) for item in result.items],
         "rejected_count": result.rejected_count,
         "rejection_reasons": {reason.value: n for reason, n in result.rejection_reasons.items()},
+        "source_remapped": result.source_remapped,
         "invalid_reason": result.invalid_reason.value if result.invalid_reason else None,
         "schema_error_count": result.schema_error_count,
         "model": result.model,
@@ -295,7 +296,7 @@ def print_result(run_number: int, repeat: int, target: PageTarget, record: dict[
     out(
         f"status={record['status']} sources={record['source_count']} "
         f"accepted={'-' if items is None else len(items)} rejected={record['rejected_count']} "
-        f"invalid_reason={record['invalid_reason']} schema_errors={record['schema_error_count']}"
+        f"remapped={record['source_remapped']} invalid_reason={record['invalid_reason']} schema_errors={record['schema_error_count']}"
     )
     for number, item in enumerate(items or [], start=1):
         out(f"  [{number}] term: {item['term']}")
