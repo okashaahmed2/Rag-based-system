@@ -86,6 +86,27 @@ class RetrievedChunk:
     similarity: float
 
 
+@dataclass(frozen=True)
+class PageChunk:
+    """One stored chunk fetched by document and page (no query, so no similarity).
+
+    Attributes:
+        chunk_id: ``f"{doc_id}:{chunk_index}"``.
+        doc_id: SHA-256 hex digest of the source PDF.
+        filename: Base name of the source PDF.
+        page_number: 1-based page the chunk comes from.
+        chunk_index: Index of the chunk within its document.
+        text: Chunk text.
+    """
+
+    chunk_id: str
+    doc_id: str
+    filename: str
+    page_number: int
+    chunk_index: int
+    text: str
+
+
 def _read_space(collection: Collection) -> Any:
     """Distance space from the collection configuration (HNSW or SPANN)."""
     with warnings.catch_warnings():
@@ -367,6 +388,77 @@ def count_document_chunks(collection: Collection, doc_id: str) -> int:
     except ChromaError as exc:
         raise VectorStoreError(f"Could not count chunks of doc_id {doc_id}: {exc}") from exc
     return len(result["ids"])
+
+
+def _to_page_chunk(chunk_id: str, text: str | None, metadata: Any) -> PageChunk:
+    """Build a :class:`PageChunk` from one row of a ``get`` result."""
+    meta = dict(metadata) if metadata else {}
+    missing = [key for key in _REQUIRED_CHUNK_KEYS if key not in meta]
+    if missing or text is None:
+        raise VectorStoreError(f"Stored chunk {chunk_id} lacks {missing or ['text']}")
+    return PageChunk(
+        chunk_id=chunk_id,
+        doc_id=str(meta["doc_id"]),
+        filename=str(meta["filename"]),
+        page_number=int(meta["page_number"]),
+        chunk_index=int(meta["chunk_index"]),
+        text=text,
+    )
+
+
+def get_page_chunks(collection: Collection, doc_id: str, page_number: int) -> list[PageChunk]:
+    """Every stored chunk of one document page, in ``chunk_index`` order.
+
+    Uses ``collection.get`` with
+    ``where={"$and": [{"doc_id": {"$eq": doc_id}}, {"page_number": {"$eq": page_number}}]}``
+    (no embedding, no similarity). Chroma's ``get`` has no guaranteed order,
+    so the chunks are sorted by ``chunk_index`` here. An unknown document or
+    a page without chunks gives ``[]``. ``page_number`` must be an int:
+    the metadata stores it as an int, so ``"3"`` would match nothing.
+
+    Raises:
+        VectorStoreError: ``doc_id`` is not a non-empty string or
+            ``page_number`` is not an int >= 1 (checked before any Chroma
+            call); Chroma fails; a stored row lacks metadata or text, or does
+            not belong to the requested document page.
+    """
+    if not isinstance(doc_id, str) or not doc_id:
+        raise VectorStoreError(f"doc_id must be a non-empty string, got {doc_id!r}")
+    if isinstance(page_number, bool) or not isinstance(page_number, int) or page_number < 1:
+        raise VectorStoreError(f"page_number must be an int >= 1, got {page_number!r}")
+    where: dict[str, Any] = {
+        "$and": [{"doc_id": {"$eq": doc_id}}, {"page_number": {"$eq": page_number}}]
+    }
+    try:
+        result = collection.get(where=where, include=["documents", "metadatas"])
+    except ChromaError as exc:
+        logger.error(
+            "Fetching chunks of %s page %d failed: %s",
+            doc_id[:LOG_DOC_ID_CHARS],
+            page_number,
+            exc,
+        )
+        raise VectorStoreError(
+            f"Could not fetch chunks of doc_id {doc_id} page {page_number}: {exc}"
+        ) from exc
+
+    ids = result["ids"] or []
+    documents = result["documents"] or []
+    metadatas = result["metadatas"] or []
+    if not len(ids) == len(documents) == len(metadatas):
+        raise VectorStoreError("Chroma returned get lists of different lengths")
+    chunks = [
+        _to_page_chunk(chunk_id, text, meta)
+        for chunk_id, text, meta in zip(ids, documents, metadatas)
+    ]
+    foreign = [c.chunk_id for c in chunks if (c.doc_id, c.page_number) != (doc_id, page_number)]
+    if foreign:
+        raise VectorStoreError(
+            f"Chroma returned {len(foreign)} chunk(s) outside doc_id {doc_id} page "
+            f"{page_number}: first {foreign[0]}"
+        )
+    chunks.sort(key=lambda c: c.chunk_index)
+    return chunks
 
 
 def _to_retrieved(

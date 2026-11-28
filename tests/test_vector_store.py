@@ -24,9 +24,11 @@ from rag_pipeline.preparation import DocumentChunk
 from rag_pipeline.vector_store import (
     DISTANCE_SPACE,
     CollectionNotFoundError,
+    PageChunk,
     RetrievedChunk,
     VectorStoreError,
     count_document_chunks,
+    get_page_chunks,
     open_collection,
     query_by_embedding,
     replace_document_chunks,
@@ -670,3 +672,145 @@ def test_query_non_finite_vector_raises(collection: Collection) -> None:
 
     with pytest.raises(VectorStoreError, match="NaN or inf"):
         query_by_embedding(collection, vector, top_k=1)
+
+
+# --------------------------------------------------------------------------- get_page_chunks
+
+
+#: (chunk_index, page_number) per document: several chunks per page, pages 1..3.
+PAGE_LAYOUT = [(0, 1), (1, 1), (2, 2), (3, 2), (4, 2), (5, 3)]
+
+
+def page_chunks(doc_id: str, filename: str, order: list[int]) -> list[DocumentChunk]:
+    """Chunks of PAGE_LAYOUT, in the given (possibly shuffled) chunk_index order."""
+    pages = dict(PAGE_LAYOUT)
+    return [
+        DocumentChunk(
+            chunk_id=f"{doc_id}:{i}",
+            doc_id=doc_id,
+            filename=filename,
+            page_number=pages[i],
+            chunk_index=i,
+            text=f"text {i} of {filename} page {pages[i]}",
+            char_start=0,
+            char_end=10,
+        )
+        for i in order
+    ]
+
+
+@pytest.fixture
+def paged_collection(collection: Collection, rng: np.random.Generator) -> Collection:
+    """DOC_A and DOC_B with PAGE_LAYOUT, upserted out of chunk_index order."""
+    for doc_id, filename, order in (
+        (DOC_A, "a.pdf", [4, 1, 5, 2, 0, 3]),
+        (DOC_B, "b.pdf", [3, 2, 1, 0, 5, 4]),
+    ):
+        chunks = page_chunks(doc_id, filename, order)
+        replace_document_chunks(collection, doc_id, chunks, make_embeddings(chunks, rng))
+    return collection
+
+
+def test_get_page_chunks_returns_only_the_requested_doc_and_page(
+    paged_collection: Collection,
+) -> None:
+    result = get_page_chunks(paged_collection, DOC_A, 2)
+
+    assert [c.chunk_id for c in result] == [f"{DOC_A}:2", f"{DOC_A}:3", f"{DOC_A}:4"]
+    assert {(c.doc_id, c.page_number, c.filename) for c in result} == {(DOC_A, 2, "a.pdf")}
+    other = get_page_chunks(paged_collection, DOC_B, 2)
+    assert {c.doc_id for c in other} == {DOC_B} and len(other) == 3
+
+
+def test_get_page_chunks_sorts_out_of_order_inserts_by_chunk_index(
+    paged_collection: Collection,
+) -> None:
+    raw = paged_collection.get(
+        where={"$and": [{"doc_id": {"$eq": DOC_A}}, {"page_number": {"$eq": 2}}]},
+        include=["metadatas"],
+    )
+    raw_order = [m["chunk_index"] for m in raw["metadatas"] or []]
+
+    result = get_page_chunks(paged_collection, DOC_A, 2)
+
+    # Chroma 1.5.9 returned these rows out of chunk_index order when this test was
+    # written (Phase 10); not asserted, because get() order is not part of its API.
+    assert sorted(raw_order) == [2, 3, 4]
+    assert [c.chunk_index for c in result] == [2, 3, 4]
+
+
+def test_get_page_chunks_full_record_and_int_metadata_round_trip(
+    paged_collection: Collection,
+) -> None:
+    (chunk,) = get_page_chunks(paged_collection, DOC_B, 3)
+
+    assert chunk == PageChunk(
+        chunk_id=f"{DOC_B}:5",
+        doc_id=DOC_B,
+        filename="b.pdf",
+        page_number=3,
+        chunk_index=5,
+        text="text 5 of b.pdf page 3",
+    )
+    assert type(chunk.page_number) is int and type(chunk.chunk_index) is int
+    assert not hasattr(chunk, "similarity")
+
+
+@pytest.mark.parametrize(("doc_id", "page"), [(DOC_A, 4), (DOC_A, 99), ("c" * 64, 1)])
+def test_get_page_chunks_missing_page_or_unknown_doc_is_empty(
+    paged_collection: Collection, doc_id: str, page: int
+) -> None:
+    assert get_page_chunks(paged_collection, doc_id, page) == []
+
+
+def test_get_page_chunks_on_empty_collection_is_empty(collection: Collection) -> None:
+    assert get_page_chunks(collection, DOC_A, 1) == []
+
+
+class ExplodingCollection:
+    """Stands in for a collection; any Chroma call fails the test."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"Chroma was called: {name}")
+
+
+@pytest.mark.parametrize(
+    ("doc_id", "page", "message"),
+    [
+        ("", 1, "doc_id must be"),
+        (None, 1, "doc_id must be"),
+        (5, 1, "doc_id must be"),
+        (DOC_A, 0, "page_number must be"),
+        (DOC_A, -1, "page_number must be"),
+        (DOC_A, True, "page_number must be"),
+        (DOC_A, "2", "page_number must be"),
+        (DOC_A, 2.0, "page_number must be"),
+        (DOC_A, None, "page_number must be"),
+    ],
+)
+def test_get_page_chunks_invalid_input_raises_before_chroma(
+    doc_id: Any, page: Any, message: str
+) -> None:
+    with pytest.raises(VectorStoreError, match=message):
+        get_page_chunks(ExplodingCollection(), doc_id, page)  # type: ignore[arg-type]
+
+
+def test_get_page_chunks_chroma_error_becomes_vector_store_error() -> None:
+    from chromadb.errors import InternalError
+
+    class FailingCollection:
+        def get(self, **kwargs: Any) -> Any:
+            raise InternalError("simulated")
+
+    with pytest.raises(VectorStoreError, match="Could not fetch chunks"):
+        get_page_chunks(FailingCollection(), DOC_A, 1)  # type: ignore[arg-type]
+
+
+def test_get_page_chunks_rejects_rows_from_another_page() -> None:
+    class WrongPageCollection:
+        def get(self, **kwargs: Any) -> Any:
+            meta = {"doc_id": DOC_A, "filename": "a.pdf", "page_number": 9, "chunk_index": 0}
+            return {"ids": [f"{DOC_A}:0"], "documents": ["t"], "metadatas": [meta]}
+
+    with pytest.raises(VectorStoreError, match="outside doc_id"):
+        get_page_chunks(WrongPageCollection(), DOC_A, 1)  # type: ignore[arg-type]

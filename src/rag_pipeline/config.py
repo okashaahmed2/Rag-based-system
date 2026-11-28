@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 120.0
     #: Most tokens the LLM may generate per answer (Ollama ``num_predict``).
     llm_max_answer_tokens: int = 256
+    #: Most tokens the LLM may generate per structured extraction (Ollama ``num_predict``);
+    #: about 70 tokens per glossary item were measured, so 768 leaves room for ~10 items.
+    llm_max_extraction_tokens: int = 768
     #: Number of chunks retrieved and sent to the LLM per question.
     query_top_k: int = 5
     #: Interface the FastAPI server binds to (127.0.0.1 = this machine only).
@@ -201,6 +204,17 @@ class Settings(BaseSettings):
         if not MIN_LLM_MAX_ANSWER_TOKENS <= value <= MAX_LLM_MAX_ANSWER_TOKENS:
             raise ValueError(
                 f"RAG_LLM_MAX_ANSWER_TOKENS must be between {MIN_LLM_MAX_ANSWER_TOKENS} "
+                f"and {MAX_LLM_MAX_ANSWER_TOKENS}, got {value}"
+            )
+        return value
+
+    @field_validator("llm_max_extraction_tokens")
+    @classmethod
+    def _check_llm_max_extraction_tokens(cls, value: int) -> int:
+        """Require ``MIN_LLM_MAX_ANSWER_TOKENS <= value <= MAX_LLM_MAX_ANSWER_TOKENS``."""
+        if not MIN_LLM_MAX_ANSWER_TOKENS <= value <= MAX_LLM_MAX_ANSWER_TOKENS:
+            raise ValueError(
+                f"RAG_LLM_MAX_EXTRACTION_TOKENS must be between {MIN_LLM_MAX_ANSWER_TOKENS} "
                 f"and {MAX_LLM_MAX_ANSWER_TOKENS}, got {value}"
             )
         return value

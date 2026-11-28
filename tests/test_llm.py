@@ -19,6 +19,7 @@ from rag_pipeline.llm import (
     LLMResponseError,
     LLMTimeoutError,
     LLMUnavailableError,
+    build_chat_payload,
     chat,
     check_ollama,
     validate_messages,
@@ -244,6 +245,113 @@ def test_default_num_predict_is_max_answer_tokens() -> None:
     chat(MESSAGES, make_settings(), client=recorder.client())
 
     assert json.loads(recorder.requests[0].content)["options"]["num_predict"] == 256
+
+
+# --------------------------------------------------------------------------- format / num_predict
+
+#: The request body every chat sent before ``format`` / ``num_predict`` existed.
+LEGACY_BODY = {
+    "model": "llama3.2:3b",
+    "messages": MESSAGES,
+    "stream": False,
+    "think": False,
+    "options": {"temperature": 0.3, "num_ctx": 2048, "num_predict": 128},
+}
+LEGACY_SETTINGS = {"llm_temperature": 0.3, "llm_num_ctx": 2048, "llm_max_answer_tokens": 128}
+SCHEMA = {
+    "type": "object",
+    "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/Item"}}},
+    "required": ["items"],
+    "$defs": {"Item": {"type": "object", "properties": {"term": {"type": "string"}}}},
+}
+
+
+def test_payload_without_new_args_equals_legacy_payload() -> None:
+    payload = build_chat_payload(list(MESSAGES), make_settings(**LEGACY_SETTINGS))
+
+    assert payload == LEGACY_BODY
+    assert list(payload) == list(LEGACY_BODY)  # same key order
+    assert list(payload["options"]) == ["temperature", "num_ctx", "num_predict"]
+    assert "format" not in payload
+
+
+def test_payload_with_explicit_none_equals_legacy_payload() -> None:
+    payload = build_chat_payload(
+        list(MESSAGES), make_settings(**LEGACY_SETTINGS), format=None, num_predict=None
+    )
+
+    assert payload == LEGACY_BODY
+
+
+def test_request_bytes_without_new_args_are_byte_identical() -> None:
+    recorder = Recorder(json_handler(chat_body()))
+
+    chat(MESSAGES, make_settings(**LEGACY_SETTINGS), client=recorder.client())
+
+    expected = httpx.Request("POST", "http://127.0.0.1:11434/api/chat", json=LEGACY_BODY)
+    assert recorder.requests[0].content == expected.content
+
+
+def test_format_json_string_is_sent_unchanged() -> None:
+    recorder = Recorder(json_handler(chat_body()))
+
+    chat(MESSAGES, make_settings(**LEGACY_SETTINGS), client=recorder.client(), format="json")
+
+    body = json.loads(recorder.requests[0].content)
+    assert body == {**LEGACY_BODY, "format": "json"}
+
+
+def test_format_schema_dict_is_sent_unchanged() -> None:
+    recorder = Recorder(json_handler(chat_body()))
+    schema = json.loads(json.dumps(SCHEMA))
+
+    chat(MESSAGES, make_settings(**LEGACY_SETTINGS), client=recorder.client(), format=schema)
+
+    body = json.loads(recorder.requests[0].content)
+    assert body["format"] == SCHEMA
+    assert {k: v for k, v in body.items() if k != "format"} == LEGACY_BODY
+    assert schema == SCHEMA  # input not mutated
+
+
+def test_num_predict_override_replaces_only_num_predict() -> None:
+    recorder = Recorder(json_handler(chat_body()))
+
+    chat(MESSAGES, make_settings(**LEGACY_SETTINGS), client=recorder.client(), num_predict=768)
+
+    body = json.loads(recorder.requests[0].content)
+    assert body["options"] == {"temperature": 0.3, "num_ctx": 2048, "num_predict": 768}
+    assert "format" not in body
+
+
+def test_format_and_num_predict_together() -> None:
+    payload = build_chat_payload(
+        list(MESSAGES), make_settings(**LEGACY_SETTINGS), format=SCHEMA, num_predict=1
+    )
+
+    assert payload["format"] is SCHEMA
+    assert payload["options"]["num_predict"] == 1
+
+
+@pytest.mark.parametrize(
+    "bad_format", ["", "JSON", "yaml", " json", {}, [], ["json"], 1, True, b"json"]
+)
+def test_invalid_format_raises_before_any_request(bad_format: Any) -> None:
+    recorder = Recorder(json_handler(chat_body()))
+
+    with pytest.raises(ValueError, match="format must be"):
+        chat(MESSAGES, make_settings(), client=recorder.client(), format=bad_format)
+
+    assert recorder.requests == []
+
+
+@pytest.mark.parametrize("bad_value", [0, -1, True, False, 1.5, "768", 768.0])
+def test_invalid_num_predict_raises_before_any_request(bad_value: Any) -> None:
+    recorder = Recorder(json_handler(chat_body()))
+
+    with pytest.raises(ValueError, match="num_predict must be an int >= 1"):
+        chat(MESSAGES, make_settings(), client=recorder.client(), num_predict=bad_value)
+
+    assert recorder.requests == []
 
 
 # --------------------------------------------------------------------------- leaked thinking

@@ -141,9 +141,61 @@ def validate_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, s
     return checked
 
 
-def build_chat_payload(messages: list[dict[str, str]], settings: Settings) -> dict[str, Any]:
-    """JSON body of a ``POST /api/chat`` request (always non-streaming, no thinking)."""
-    return {
+#: Output format accepted by :func:`chat`: ``"json"`` or a JSON schema (dict).
+ChatFormat = str | dict[str, Any]
+
+
+def validate_format(format: object) -> None:
+    """Check an Ollama ``format`` value: the string ``"json"`` or a non-empty dict.
+
+    Raises:
+        ValueError: any other value.
+    """
+    if isinstance(format, str):
+        if format != "json":
+            raise ValueError(f'format must be "json" or a JSON schema dict, got {format!r}')
+        return
+    if not isinstance(format, dict) or not format:
+        raise ValueError(
+            f'format must be "json" or a non-empty JSON schema dict, got {type(format).__name__}'
+        )
+
+
+def validate_num_predict(num_predict: object) -> int:
+    """Check a ``num_predict`` override: an int >= 1 (bool rejected).
+
+    Raises:
+        ValueError: any other value.
+    """
+    if isinstance(num_predict, bool) or not isinstance(num_predict, int) or num_predict < 1:
+        raise ValueError(f"num_predict must be an int >= 1, got {num_predict!r}")
+    return num_predict
+
+
+def build_chat_payload(
+    messages: list[dict[str, str]],
+    settings: Settings,
+    *,
+    format: ChatFormat | None = None,
+    num_predict: int | None = None,
+) -> dict[str, Any]:
+    """JSON body of a ``POST /api/chat`` request (always non-streaming, no thinking).
+
+    Without ``format`` and ``num_predict`` the body is exactly the same as
+    before these options existed. ``format`` (``"json"`` or a JSON schema
+    dict) is added as the top-level ``format`` key only when given;
+    ``num_predict`` replaces ``options.num_predict``
+    (``settings.llm_max_answer_tokens``) only when given.
+
+    Raises:
+        ValueError: invalid ``format`` or ``num_predict``.
+    """
+    if format is not None:
+        validate_format(format)
+    predict = (
+        settings.llm_max_answer_tokens if num_predict is None else validate_num_predict(num_predict)
+    )
+    payload: dict[str, Any] = {
         "model": settings.llm_model,
         "messages": messages,
         "stream": False,
@@ -151,9 +203,12 @@ def build_chat_payload(messages: list[dict[str, str]], settings: Settings) -> di
         "options": {
             "temperature": settings.llm_temperature,
             "num_ctx": settings.llm_num_ctx,
-            "num_predict": settings.llm_max_answer_tokens,
+            "num_predict": predict,
         },
     }
+    if format is not None:
+        payload["format"] = format
+    return payload
 
 
 @contextmanager
@@ -320,21 +375,28 @@ def chat(
     settings: Settings,
     *,
     client: httpx.Client | None = None,
+    format: ChatFormat | None = None,
+    num_predict: int | None = None,
 ) -> LLMResponse:
     """Send a non-streaming chat request to Ollama and return the answer.
 
     Messages are validated before any request is sent. The request always
     uses ``stream: false`` and ``think: false``, with ``temperature`` and
-    ``num_ctx`` from ``settings``.
+    ``num_ctx`` from ``settings``. Optional ``format`` (``"json"`` or a JSON
+    schema dict) and ``num_predict`` are passed to
+    :func:`build_chat_payload`; without them the request is unchanged.
 
     Raises:
-        ValueError: invalid ``messages`` (no request is sent).
+        ValueError: invalid ``messages``, ``format`` or ``num_predict`` (no
+            request is sent).
         LLMUnavailableError: the server cannot be reached.
         LLMModelNotFoundError: Ollama answers 404 (model not installed).
         LLMTimeoutError: no answer within ``settings.llm_timeout_seconds``.
         LLMResponseError: other HTTP error status, invalid JSON or missing fields.
     """
-    payload = build_chat_payload(validate_messages(messages), settings)
+    payload = build_chat_payload(
+        validate_messages(messages), settings, format=format, num_predict=num_predict
+    )
     with _client_scope(settings, client) as http:
         response = _send(http, "POST", "/api/chat", settings, payload)
     if response.status_code == 404:
