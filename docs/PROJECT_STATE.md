@@ -828,6 +828,17 @@
 - Retry On Fail (3 x 5000 ms) for transient HTTP errors; Stop and Error for
   real failures (job not succeeded, poll guard reached)
 - Test PDFs kept out of the live inbox (data/test_pdfs/, git-ignored)
+- PRE-REGISTERED RULE, Phase 10 Step 3 glossary measurement (recorded before any
+  real glossary run): eval store all-minilm-l6-v2_600_120, llama3.2:3b, GPU,
+  temperature 0, num_predict 768. 8 pages chosen from the page menu before the run:
+  6 definition pages (2 each from LACE, Lecture07, SVM notes) + 2 negative pages (no
+  definitions). Each accepted item is labelled by hand: correct (the page defines or
+  explains the term AND the definition agrees with the evidence) or wrong. PASS only
+  if ALL hold: (1) invalid_output 0/8, truncation included; (2) >= 5/6 definition
+  pages have >= 1 correct item; (3) wrong items <= 20% of accepted items on
+  definition pages; (4) >= 1/2 negative pages have 0 accepted items; (5) warm median
+  (total - load seconds) <= 5 s. Reported, not conditions: identical output on a
+  second run, rejection reasons, token counts. FAIL -> no endpoint; diagnose first.
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
