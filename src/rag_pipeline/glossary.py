@@ -20,10 +20,18 @@ Fail closed at two levels:
   :data:`MAX_DEFINITION_CHARS`, :data:`MAX_EVIDENCE_CHARS`),
   ``SOURCE_OUT_OF_RANGE`` (source not ``S<n>`` per :data:`SOURCE_ID_PATTERN`,
   or ``n`` not in ``1..number of sources``), ``EVIDENCE_NOT_IN_SOURCE``
-  (normalized evidence is not a substring of the cited chunk's normalized
-  ORIGINAL text), ``TERM_NOT_IN_EVIDENCE``, ``DUPLICATE_TERM`` (normalized
-  term already accepted). Normalized = whitespace runs collapsed to one
-  space, stripped, casefolded.
+  (normalized evidence is a substring of the normalized ORIGINAL text of
+  neither the cited chunk nor any other single chunk of the page),
+  ``TERM_NOT_IN_EVIDENCE``, ``DUPLICATE_TERM`` (normalized term already
+  accepted). Normalized = whitespace runs collapsed to one space, stripped,
+  casefolded.
+
+Source remap: when the evidence is not in the cited chunk but is in another
+single chunk of the same page (searched in source order), the item is kept
+with THAT chunk's location and counted in ``GlossaryResult.source_remapped``
+(the Phase 10 dev pages showed the model citing a neighbouring source for
+text that the chunk overlap places in the next chunk). Evidence that only
+exists across two chunks is still dropped (no cross-chunk matching).
 
 These checks prove the evidence is real document text and contains the term;
 they cannot prove the text DEFINES the term (the Step 0 probe saw the model
@@ -116,9 +124,9 @@ GLOSSARY_SYSTEM_PROMPT = (
     "Do not use outside knowledge.\n"
     "2. evidence: copy the shortest exact part (at most 200 characters) of ONE source "
     "that defines or explains the term, character for character. "
-    "Never translate or paraphrase it.\n"
-    "3. definition: a short definition of the term, written in the same language "
-    "as that source.\n"
+    "Never translate or paraphrase it. The evidence must contain the term itself.\n"
+    "3. definition: a short definition of the term using only information from that "
+    "source, written in the same language as that source.\n"
     "4. source: the id of that source, like S1.\n"
     f"5. Return at most {PROMPT_MAX_ITEMS} items.\n"
     '6. If no term is defined or explained in the sources, return {"items": []}.\n'
@@ -186,6 +194,8 @@ class GlossaryResult:
         rejected_count: Items dropped by the item checks.
         rejection_reasons: Count per :class:`RejectionReason` (every reason
             present, 0 if none).
+        source_remapped: Accepted items whose evidence was found in another
+            chunk of the page than the cited one (their location is that chunk).
         invalid_reason: Why the whole output was rejected (``INVALID_OUTPUT`` only).
         schema_error_count: Pydantic errors (``SCHEMA_VALIDATION`` only), else 0.
         source_count: Number of chunks sent as sources.
@@ -201,6 +211,7 @@ class GlossaryResult:
     items: list[GlossaryItem] | None
     rejected_count: int
     rejection_reasons: dict[RejectionReason, int]
+    source_remapped: int
     invalid_reason: InvalidReason | None
     schema_error_count: int
     source_count: int
@@ -307,21 +318,36 @@ def _is_too_long(item: GlossaryItemOut) -> bool:
     )
 
 
+def _evidence_chunk(evidence: str, cited: int, normalized: Sequence[str]) -> int | None:
+    """Index of the chunk holding ``evidence``: the cited one first, then the others in order."""
+    if evidence in normalized[cited]:
+        return cited
+    return next(
+        (index for index, text in enumerate(normalized) if index != cited and evidence in text),
+        None,
+    )
+
+
 def check_items(
     items: Sequence[GlossaryItemOut], sources: Sequence[PageChunk]
-) -> tuple[list[GlossaryItem], dict[RejectionReason, int]]:
-    """Accepted items (model order) and the count of drops per reason.
+) -> tuple[list[GlossaryItem], dict[RejectionReason, int], int]:
+    """Accepted items (model order), the count of drops per reason, and the remap count.
 
     Only the first :data:`MAX_OUTPUT_ITEMS` items are checked; each later
     item is counted as ``TOO_MANY_ITEMS``. Then, first failure wins: blank
-    field, field too long, source invalid or out of range, evidence not in
-    the cited source, term not in evidence, duplicate term.
+    field, field too long, source invalid or out of range, evidence in no
+    single chunk of the page, term not in evidence, duplicate term.
+    Evidence found in another chunk than the cited one (the cited chunk
+    wins when both hold it) is accepted with that chunk's location; the
+    third value counts such ACCEPTED items.
     ``sources`` must be in source-number order (``S1`` first).
     """
     accepted: list[GlossaryItem] = []
     reasons = {reason: 0 for reason in RejectionReason}
     reasons[RejectionReason.TOO_MANY_ITEMS] = max(0, len(items) - MAX_OUTPUT_ITEMS)
     seen_terms: set[str] = set()
+    remapped = 0
+    normalized = [normalize(source.text) for source in sources]
     for item in items[:MAX_OUTPUT_ITEMS]:
         if _is_blank(item):
             reasons[RejectionReason.BLANK_FIELD] += 1
@@ -333,12 +359,13 @@ def check_items(
         if index is None:
             reasons[RejectionReason.SOURCE_OUT_OF_RANGE] += 1
             continue
-        chunk = sources[index]
         evidence = normalize(item.evidence)
         term = normalize(item.term)
-        if evidence not in normalize(chunk.text):
+        found = _evidence_chunk(evidence, index, normalized)
+        if found is None:
             reasons[RejectionReason.EVIDENCE_NOT_IN_SOURCE] += 1
             continue
+        chunk = sources[found]
         if term not in evidence:
             reasons[RejectionReason.TERM_NOT_IN_EVIDENCE] += 1
             continue
@@ -346,6 +373,8 @@ def check_items(
             reasons[RejectionReason.DUPLICATE_TERM] += 1
             continue
         seen_terms.add(term)
+        if found != index:
+            remapped += 1
         accepted.append(
             GlossaryItem(
                 term=item.term,
@@ -356,7 +385,7 @@ def check_items(
                 filename=chunk.filename,
             )
         )
-    return accepted, reasons
+    return accepted, reasons, remapped
 
 
 # --- orchestration ----------------------------------------------------------------------
@@ -411,11 +440,12 @@ def extract_page_glossary(
 
     items: list[GlossaryItem] | None
     reasons = {reason: 0 for reason in RejectionReason}
+    remapped = 0
     if structured.status is StructuredStatus.INVALID_OUTPUT or structured.value is None:
         status = GlossaryStatus.INVALID_OUTPUT
         items = None
     else:
-        accepted, reasons = check_items(structured.value.items, sources)
+        accepted, reasons, remapped = check_items(structured.value.items, sources)
         items = accepted
         if not structured.value.items:
             status = GlossaryStatus.NONE_FOUND
@@ -432,6 +462,7 @@ def extract_page_glossary(
         items=items,
         rejected_count=sum(reasons.values()),
         rejection_reasons=reasons,
+        source_remapped=remapped,
         invalid_reason=structured.reason,
         schema_error_count=structured.error_count,
         source_count=len(sources),
@@ -445,7 +476,7 @@ def extract_page_glossary(
     )
     logger.info(
         "Glossary %s page %d: status=%s, %d source(s), accepted=%s, rejected=%d %s, "
-        "invalid_reason=%s, prompt_tokens=%d, completion_tokens=%d, total %.2f s",
+        "remapped=%d, invalid_reason=%s, prompt_tokens=%d, completion_tokens=%d, total %.2f s",
         doc_id[:LOG_DOC_ID_CHARS],
         page_number,
         result.status.value,
@@ -453,6 +484,7 @@ def extract_page_glossary(
         len(items) if items is not None else None,
         result.rejected_count,
         {reason.value: count for reason, count in reasons.items() if count},
+        result.source_remapped,
         result.invalid_reason.value if result.invalid_reason else None,
         result.prompt_tokens,
         result.completion_tokens,
