@@ -10,7 +10,7 @@ page citations.
 INGESTION (write path)
 
 ```
-data/inbox -> n8n Schedule Trigger -> FastAPI POST /ingest/scan
+data/inbox -> n8n Schedule Trigger -> FastAPI POST http://127.0.0.1:8000/ingest/scan
   -> BackgroundTasks worker: PyMuPDF extraction -> cleaning
      -> page-aware chunking -> Sentence Transformers embeddings
   -> ChromaDB (vectors + chunk metadata) + SQLite (document/job status)
@@ -244,6 +244,47 @@ user or n8n -> FastAPI /query -> retriever (embed query, top-k from ChromaDB)
   with local_files_only) are set in the process before the model library is
   imported.
 
+## n8n workflow (Phase 9)
+- Workflow "RAG ingest (scheduled)", kept in git as
+  n8n/workflows/rag_ingest_scheduled.json (UI edits -> re-export + run
+  tests/test_n8n_workflow.py). n8n calls the API at http://127.0.0.1:8000,
+  never localhost (Node resolves localhost to ::1 first, n8n disables the
+  IPv4 fallback, Uvicorn binds IPv4 only -> connection refused).
+- Node chain:
+
+```
+Schedule every 5 min --+
+Manual run ------------+--> Start scan (POST /ingest/scan)
+  -> Already running? --true--> Skip: scan already running
+       | false
+       v
+     Wait 3s <-------------------------------+
+       -> Check status (GET /status/{{ $('Start scan').first().json.job_id }})
+       -> Still running? (queued/running AND $runIndex < 40) --true--+
+            | false
+            v
+          Job succeeded? --true--> Done
+            | false
+            v
+          Scan not succeeded (Stop and Error)
+```
+
+- Error handling: both HTTP nodes have timeout 10000 ms and Retry On Fail
+  (3 tries, 5000 ms apart) for transient errors; an API that stays down fails
+  the execution ("The service refused the connection"). A job that ends not
+  succeeded, or is still running after 40 polls, ends in Stop and Error with
+  "Scan job ... ended with status '...'". A succeeded job with failed documents
+  is not an alarm. Only one published workflow calls the API.
+- Staging launcher: scripts/run_api_staging.py prepare copies the live inbox
+  PDFs into data/staging/<YYYYMMDD-HHMMSS>/inbox; serve starts the same app
+  with RAG_* overrides pointing every store and folder into that run (safety
+  check refuses live paths, exit 2). Workflows are built and tested on staging
+  first.
+- Go-live (2026-11-28): live API on data/inbox, data/chroma, data/status.db;
+  workflow published; n8n started from %USERPROFILE% (its bin loads a .env from
+  the cwd). The imported settings.timezone was not applied; Asia/Karachi is set
+  in the UI.
+
 ## Local services
-n8n localhost:5678 (npm) | FastAPI localhost:8000 | Ollama 127.0.0.1:11434
+n8n 127.0.0.1:5678 (npm, listens on ::) | FastAPI 127.0.0.1:8000 | Ollama 127.0.0.1:11434
 (runs on the GTX 1080 Ti via CUDA)

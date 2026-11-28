@@ -420,3 +420,63 @@
 - G2: library=CUDA, 29/29 layers on GPU, 100% GPU; median 7.85 s -> 0.96 s,
   prompt eval ~17x, generation ~5x; statuses and citation hits identical to CPU.
   Pre-registered rule 4/4 PASS -> GPU kept.
+
+## 2026-11-27 — Phase 9
+- Step 0 (read-only): n8n 2.14.2 via npm (C:\Users\xt\AppData\Roaming\npm);
+  %USERPROFILE%\.n8n already existed since 2026-04-06 (own database.sqlite,
+  practice workflows only). Installed defaults: port 5678 listen ::, task-runner
+  broker 127.0.0.1:5679, NODES_EXCLUDE executeCommand + localFileTrigger, file
+  access ~/.n8n-files; `n8n` == `n8n start`. The n8n bin loads dotenv from the
+  cwd and disables autoSelectFamily, and Node resolves localhost ::1 first
+  (verbatim). The live inbox's 8 PDFs are fully backed up (SHA-256) in
+  data/eval/corpus.
+- Step 1: scripts/run_api_staging.py prepare (timestamped data/staging/<run>/,
+  copy2, never overwrite or delete) and serve (RAG_* overrides, safety check
+  exit 2, --print-only); 33 tests. Commit c81496d. n8n probe:
+  http://localhost:8000/health -> "The service refused the connection";
+  http://127.0.0.1:8000/health -> 200. Staging startup 8.44 s; stores created
+  only under the run folder.
+- Step 2 (manual poll workflow on staging): run 1 job 4.80 s: done 4 (86
+  chunks), needs_ocr 1, failed 2 left in the inbox, duplicate moved without
+  ingestion, 2 polls. An extra scan (likely "Execute step" on the POST node)
+  gave attempt 2; the next run (attempt 3) moved both bad PDFs to failed/.
+  Empty inbox -> job succeeded. A finished job gives a new job_id with
+  already_running false.
+
+## 2026-11-28 — Phase 9
+- Step 3: workflow as code n8n/workflows/rag_ingest_scheduled.json: Schedule
+  every 5 min + Manual run -> Start scan POST /ingest/scan (timeout 10000,
+  retry 3 x 5000 ms) -> Already running? (true -> Skip) -> Wait 3s -> Check
+  status GET /status/{{ $('Start scan').first().json.job_id }} (same retry) ->
+  Still running? (queued/running AND $runIndex < 40 -> loop) -> Job succeeded?
+  -> Done | Scan not succeeded (Stop and Error). typeVersions from the
+  installed n8n files: httpRequest 4.4, wait 1.1, if 2.3, noOp 1, manualTrigger
+  1, scheduleTrigger 1.3, stopAndError 1. tests/test_n8n_workflow.py (17
+  tests), n8n/README.md, .gitignore data/test_pdfs/ and n8n/reference/.
+  Import accepted (11 nodes); the live export differs from the repo file only
+  by omitted default parameters and n8n default settings.
+- Staging tests in n8n: happy path Done with failed documents (no alarm);
+  Skip branch on already_running reported by the user (no screenshot); guard
+  set to 0 -> "Scan job ... ended with status 'running'"; API stopped -> Start
+  scan error "The service refused the connection"; one Start scan took
+  10.189 s and succeeded (retry, likely while the server was starting;
+  unverified). The imported settings.timezone was not applied
+  (America/New_York) -> Asia/Karachi set in the UI, verified in the trigger
+  output. Real-console Ctrl+C: "API stopped: HTTP client closed" and the
+  launcher's "Ctrl+C received, waiting for the server to stop".
+- Go-live: the user moved 5 test PDFs to data/test_pdfs/ (sizes unchanged);
+  live inbox LACE, Lecture07, SVM notes + the new
+  Phase8_Concepts_and_Interview_QA.pdf. The live API created data/status.db
+  and data/chroma; startup 22.61 s (~21 s before the model load line; cause
+  unknown). Workflow published; schedule tick 16:15:19 -> job succeeded in
+  7.40 s, 3 polls, done 4: LACE 24, Lecture07 17, Phase8 63, SVM 43 = 147
+  chunks, all 4 moved to data/processed.
+- /query on the live store: Outlook question -> "0.246" citing Lecture07 p.9
+  (first call 33.8 s incl. Ollama GPU cold load 32.57 s); "Why are the FastAPI
+  endpoint handlers plain def instead of async def?" -> Phase8 p.11
+  (similarity 0.63), 1.57 s; a compound RAG + SVM question cited SVM notes
+  p.32 and LACE p.1 (retrieval split across topics; citation pages not
+  manually checked). 1287 tests passing. Phase 9 complete.
+- Lessons: "Execute step" on a POST node has real side effects (it sent an
+  extra scan). A file setting is not runtime behaviour: the imported timezone
+  was ignored until set in the UI.

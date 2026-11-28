@@ -8,7 +8,7 @@
 | pydantic-settings | Typed config from env/.env | Phase 1 | Yes | Installed | 2.16.2 |
 | pytest | Automated tests | Phase 1 | Yes (dev) | Installed | 9.2.0 |
 | logging | Logs (stdlib) | Phase 1 | Yes | Built in | - |
-| n8n | Workflow orchestration | Phase 9 | Yes | Installed via npm, not running | 2.14.2 |
+| n8n | Workflow orchestration | Phase 9 | Yes | Running; workflow RAG ingest (scheduled) published on the live API | 2.14.2 |
 | Node.js / npm | Runtime for n8n | Phase 9 | Yes | Installed | 24.14.1 / 11.11.0 |
 | PyMuPDF | PDF text extraction | Phase 2 | Yes | Installed (2.x, bundles layout/4llm) | 2.1 |
 | numpy | Dependency of PyMuPDF 2.x (also needed for embeddings) | Phase 2 | Yes (direct import in embeddings) | Installed | 2.4.6 |

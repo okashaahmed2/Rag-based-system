@@ -57,6 +57,15 @@
 - GPU step (between Phase 8 and 9): COMPLETE (2026-11-27): G0 CPU baseline,
   NVIDIA driver 582.78, CUDA_VISIBLE_DEVICES removed, G2 pre-registered rule
   4/4 PASS
+- Phase 9 Step 0 (read-only n8n runtime + live data check): COMPLETE (2026-11-27)
+- Phase 9 Step 1 (staging launcher scripts/run_api_staging.py): COMPLETE
+  (commit c81496d)
+- Phase 9 Step 2 (manual poll workflow in n8n on staging): COMPLETE (2026-11-27)
+- Phase 9 Step 3 (workflow as code n8n/workflows/rag_ingest_scheduled.json +
+  tests, staging tests in n8n): COMPLETE (2026-11-28)
+- Phase 9 go-live (live API, workflow published, first scheduled run): COMPLETE
+  (2026-11-28)
+- Phase 9 (n8n orchestration): COMPLETE
 - Next: see Next precise task
 
 ## Verified (with evidence)
@@ -401,6 +410,50 @@
   question incl. warm-up), prompt eval ~2580 tok/s, generation ~94 tok/s;
   no status or citation-hit change vs CPU (q04 43 vs 47 completion tokens)
 - 1237 pytest tests passing
+- Phase 9 Step 0 (read-only): n8n 2.14.2 via npm (C:\Users\xt\AppData\Roaming\npm),
+  data folder %USERPROFILE%\.n8n (own database.sqlite, existed since
+  2026-04-06, practice workflows only); installed defaults: port 5678 listen ::,
+  task-runner broker 127.0.0.1:5679, NODES_EXCLUDE executeCommand +
+  localFileTrigger, file access ~/.n8n-files; `n8n` == `n8n start`; the n8n bin
+  loads dotenv from the cwd and disables autoSelectFamily; Node resolves
+  localhost ::1 first (verbatim); live inbox 8 PDFs fully backed up (SHA-256)
+  in data/eval/corpus
+- Phase 9 Step 1: run_api_staging.py prepare/serve (33 tests); n8n probe
+  http://localhost:8000/health -> "The service refused the connection",
+  http://127.0.0.1:8000/health -> 200; staging startup 8.44 s, stores created
+  only under the run folder
+- Phase 9 Step 2 (manual poll workflow, staging): run 1 job 4.80 s: done 4
+  (86 chunks), needs_ocr 1, failed 2 left in inbox, duplicate moved without
+  ingestion, 2 polls; an extra scan (likely "Execute step" on the POST node)
+  gave attempt 2; next run attempt 3 moved both bad PDFs to failed/; empty
+  inbox -> job succeeded; new job_id after a finished job, already_running false
+- Phase 9 Step 3: workflow JSON with typeVersions from the installed n8n files
+  (httpRequest 4.4, wait 1.1, if 2.3, noOp 1, manualTrigger 1, scheduleTrigger
+  1.3, stopAndError 1); tests/test_n8n_workflow.py (17 tests); import accepted
+  (11 nodes); live export vs repo file: no logic difference (export omits
+  default-valued parameters and adds n8n default settings)
+- Phase 9 Step 3 staging tests in n8n: happy path Done with failed documents
+  (no alarm); Skip branch on already_running (reported by the user); guard set
+  to 0 -> "Scan job ... ended with status 'running'"; API stopped -> Start scan
+  error "The service refused the connection"; one Start scan took 10.189 s and
+  succeeded; imported settings.timezone not applied (America/New_York) -> set
+  Asia/Karachi in the UI, verified in the trigger output
+- Real-console Ctrl+C on the staging launcher: "API stopped: HTTP client
+  closed" and "Ctrl+C received, waiting for the server to stop"
+- Go-live (2026-11-28): 5 test PDFs moved by the user to data/test_pdfs/ (sizes
+  unchanged); live inbox LACE, Lecture07, SVM notes + the user's new
+  Phase8_Concepts_and_Interview_QA.pdf; live API created data/status.db and
+  data/chroma, startup 22.61 s (~21 s before the model load line); workflow
+  published; schedule tick 16:15:19 -> job succeeded 7.40 s, 3 polls, done 4:
+  LACE 24, Lecture07 17, Phase8 63, SVM 43 = 147 chunks, all 4 moved to
+  data/processed
+- Go-live /query: Outlook question -> "0.246" citing Lecture07 p.9 (first call
+  33.8 s incl. Ollama GPU cold load 32.57 s); "Why are the FastAPI endpoint
+  handlers plain def instead of async def?" -> cites
+  Phase8_Concepts_and_Interview_QA.pdf p.11 (similarity 0.63), 1.57 s; a
+  compound RAG + SVM question cited SVM notes p.32 and LACE p.1 (retrieval split
+  across topics)
+- 1287 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -434,13 +487,15 @@
 - Faithfulness of answers (cited source supports the claim): not measured
   automatically; manual review only
 - llama3.2:3b on documents or questions beyond the 15-question golden set
-- n8n -> FastAPI latency with "localhost" (Phase 9)
-- GPU cold load time (only a 40.17 s first /api/generate including the load
-  was seen)
 - Ollama total duration per question (rag_smoke.py does not print it)
 - Concurrent encode under load (only 3 queries during one scan tested)
-- Real n8n calls (Phase 9)
 - Cause of the ~25-49 s startups seen only inside Claude Code processes
+- Skip branch (already_running) in n8n: reported by the user, no screenshot
+  evidence
+- Cause of the 10.189 s Start scan (retry likely while the server was
+  starting) and of the 22.61 s live startup (~21 s before the model load line)
+- Faithfulness of the go-live citations Phase8 p.11, SVM notes p.32 and LACE
+  p.1 (page content not manually checked)
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -536,9 +591,16 @@
 - tests/test_api_app.py, tests/test_api_jobs.py, tests/test_api_ingest.py,
   tests/test_api_validation.py, tests/test_api_query.py,
   tests/test_inbox_one_file.py, tests/test_status_db_jobs.py
+- scripts/run_api_staging.py: prepare (timestamped data/staging/<run>/, copy2,
+  never overwrite/delete) and serve (RAG_* overrides, safety exit 2,
+  --print-only); tests/test_run_api_staging.py
+- n8n/workflows/rag_ingest_scheduled.json: workflow "RAG ingest (scheduled)";
+  n8n/README.md (import, rules, daily run commands); tests/test_n8n_workflow.py
+- n8n/reference/: local UI exports only (git-ignored)
 
 ## Key decisions
-- Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n: http://localhost:8000
+- Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n:
+  http://127.0.0.1:8000 (localhost refused, verified 2026-11-27)
 - PyMuPDF 2.x kept (bundles layout + 4llm, pulls numpy and onnxruntime); AGPL license noted
 - Document needs_ocr only when no page has text (blank pages do not block a document)
 - Duplicate detection by hashing BEFORE extraction; scan never moves or deletes files
@@ -757,6 +819,15 @@
   environment-variable change needs a full Ollama server restart (reboot is
   simplest); Ollama's prompt cache makes back-to-back benchmark runs
   misleading, compare uncached run against uncached run
+- n8n: staging first (scripts/run_api_staging.py), then go-live on the live API
+- n8n is started from %USERPROFILE% (its bin loads a .env from the cwd)
+- The workflow lives in git (n8n/workflows/); UI edits -> re-export, overwrite
+  the JSON, run tests/test_n8n_workflow.py
+- Only one published workflow calls the API; schedule every 5 minutes
+- Job "succeeded" with failed documents is not an alarm
+- Retry On Fail (3 x 5000 ms) for transient HTTP errors; Stop and Error for
+  real failures (job not succeeded, poll guard reached)
+- Test PDFs kept out of the live inbox (data/test_pdfs/, git-ignored)
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -872,8 +943,8 @@ Windows 11, PowerShell 5.1
   can fail at generation (q01)
 - Chroma rewrites its files on a query-only open/close: eval stores are not
   byte-identical across runs (run evals on a copy in Phase 11)
-- Uvicorn also binds 127.0.0.1 by default: n8n calling "localhost" may pay
-  the same IPv6 fallback delay (measure in Phase 9)
+- Uvicorn also binds 127.0.0.1 by default: n8n calling "localhost" is refused
+  (Phase 9, not a delay); the workflow uses 127.0.0.1
 - A 404 from /api/chat is always reported as "model not found" (a wrong base
   URL also gives 404)
 - llm.chat opens a new HTTP connection per call (~0.15 s); Phase 8 can reuse
@@ -896,8 +967,12 @@ Windows 11, PowerShell 5.1
 - uvicorn --reload re-runs startup recovery; v2 db unreadable by code <= e4f7ec3
 - 422 has two shapes (string detail for bad names, list for malformed bodies)
 - File replaced between /ingest validation and the job -> new bytes ingested
+- "Execute step" on an n8n POST node sends a real request (an extra scan job)
+- Imported workflow timezone not applied (set it in the n8n UI after import)
+- Empty-inbox scans every 5 min add job rows and log lines
+- Staging and live share logs/app.log
+- Staging runs accumulate in data/staging/ (never deleted by the script)
 
 ## Next precise task
-Phase 9 Step 0: n8n basics + read-only check (n8n 2.14.2 via npm, port 5678,
-Schedule Trigger -> POST /ingest/scan -> poll /status), live data paths
-decision (data/inbox, data/chroma, data/status.db still unused).
+Phase 10 Step 0: structured extraction (JSON validated with Pydantic): concepts and
+read-only design check.
