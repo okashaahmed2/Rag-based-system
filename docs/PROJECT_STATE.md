@@ -842,6 +842,12 @@
   Page selection (fixed before the run): definition pages LACE p.1, LACE p.2,
   Lecture07 p.4, Lecture07 p.6, SVM notes p.1, SVM notes p.18; negative pages
   LACE p.4 (references), Lecture07 p.1 (title slide).
+  Result run 20261128-213349 (dev set): FAIL on condition 2 (4/6); conditions 1, 3
+  (20%), 4, 5 passed. These 8 pages are now the DEV set. TEST set (fixed before any
+  fix): definition pages LACE p.3, partly_blank_test p.1, Lecture07 p.7, Lecture07
+  p.10, SVM notes p.7, SVM notes p.10; negative pages Lecture07 p.9, SVM notes p.26.
+  Same 5 conditions, same settings. ONE attempt only: if the test set FAILS, the
+  glossary module stays, no endpoint is built, and Phase 10 closes as PARTIAL.
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
