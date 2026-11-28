@@ -839,6 +839,9 @@
   definition pages; (4) >= 1/2 negative pages have 0 accepted items; (5) warm median
   (total - load seconds) <= 5 s. Reported, not conditions: identical output on a
   second run, rejection reasons, token counts. FAIL -> no endpoint; diagnose first.
+  Page selection (fixed before the run): definition pages LACE p.1, LACE p.2,
+  Lecture07 p.4, Lecture07 p.6, SVM notes p.1, SVM notes p.18; negative pages
+  LACE p.4 (references), Lecture07 p.1 (title slide).
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
