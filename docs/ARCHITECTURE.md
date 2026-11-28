@@ -285,6 +285,35 @@ Manual run ------------+--> Start scan (POST /ingest/scan)
   the cwd). The imported settings.timezone was not applied; Asia/Karachi is set
   in the UI.
 
+## Structured output (Phase 10, PARTIAL)
+- Page glossary, on demand and read-only (nothing stored, no ingestion change):
+
+```
+extract_page_glossary(doc_id, page)
+  -> status store: document exists and is done (else DocumentNotFoundError /
+     DocumentNotReadyError, no LLM call)
+  -> get_page_chunks (Chroma get, $and doc_id + page_number, sorted by
+     chunk_index; no chunks -> PageNotFoundError)
+  -> messages: fixed GLOSSARY_SYSTEM_PROMPT + <source id="S#"> blocks (/query
+     format, tag neutralisation) + task + grammar schema text
+  -> call_structured: chat with format = grammar schema, num_predict 768
+     -> truncated / thinking leaked / empty / Pydantic shape check
+        (fail -> INVALID_OUTPUT, no items)
+  -> check_items per item (first failure wins, every drop counted):
+     too many (> 10), blank field, field too long (80/300/300), source invalid
+     or out of range, evidence in no single chunk of the page (source remap
+     when it is in another chunk), term not in evidence, duplicate term
+  -> GlossaryResult: EXTRACTED / NONE_FOUND / ALL_REJECTED / INVALID_OUTPUT,
+     item locations (page, chunk_id, filename) from the chunk, never the model
+```
+
+- structured_output.grammar_schema strips constraint keywords (lengths,
+  patterns, counts, ranges, format) from the Pydantic schema: in the grammar
+  they truncated text silently. Pydantic checks only the shape; every limit is
+  checked per item so one bad item never invalidates the page.
+- Not exposed by the API: the glossary failed its pre-registered test
+  (2026-11-28). scripts/glossary_smoke.py runs it on the eval store only.
+
 ## Local services
 n8n 127.0.0.1:5678 (npm, listens on ::) | FastAPI 127.0.0.1:8000 | Ollama 127.0.0.1:11434
 (runs on the GTX 1080 Ti via CUDA)

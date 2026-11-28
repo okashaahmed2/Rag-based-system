@@ -480,3 +480,49 @@
 - Lessons: "Execute step" on a POST node has real side effects (it sent an
   extra scan). A file setting is not runtime behaviour: the imported timezone
   was ignored until set in the UI.
+
+## 2026-11-28 — Phase 10
+- Step 0 (read-only design check + live probe, Ollama 0.40.19, llama3.2:3b): a
+  dict format incl. $defs/$ref is accepted; maxLength in the grammar silently
+  truncated "stochastic gradient descent" to "stochastic gradient";
+  done_reason length gives broken JSON; ~70 completion tokens per item; the
+  model invented an item from sources without definitions.
+- P1 (Steps 1-2): structured_output.py (grammar_schema strips constraint
+  keywords, call_structured fail-closed, no retry), llm.py keyword-only format
+  / num_predict (old payloads byte-identical, proven by request bytes),
+  RAG_LLM_MAX_EXTRACTION_TOKENS=768, pydantic>=2.14,<3 declared (pip freeze
+  unchanged), vector_store PageChunk + get_page_chunks ($and filter verified on
+  Chroma 1.5.9; get() order is not chunk_index order), glossary.py
+  (extract_page_glossary + item checks). Commit b17bb7f.
+- P1 fix: Pydantic validation is all-or-nothing, so one long item made the whole
+  page INVALID_OUTPUT; models reduced to shape only, limits checked per item
+  (TOO_MANY_ITEMS, BLANK_FIELD, FIELD_TOO_LONG, source pattern in
+  SOURCE_OUT_OF_RANGE); prompt rule 2 asks for the shortest exact part (<= 200
+  chars). Commit 54252e0.
+- P2a: measurement rule pre-registered before any real glossary run (commit
+  2ad223a); scripts/glossary_smoke.py pages / run on the eval store only
+  (commit 6ab5dcc); dev page selection recorded before the run (commit b48abcf).
+- Dev run 20261128-213349: FAIL on condition 2 (4/6); conditions 1, 3 (20%), 4,
+  5 (warm median 1.04 s) passed. Labels by user + mentor; these pages became
+  the DEV set.
+- Diagnosis (4 dev pages): WRONG_SOURCE 4/6 of EVIDENCE_NOT_IN_SOURCE (exact
+  text in another chunk of the page), 2 with characters changed by the model
+  (". . ." -> "...", formula symbols); 3 TERM_NOT_IN_EVIDENCE with the term in
+  the cited chunk. TEST set pre-registered before any fix (commit d7032f2).
+- Fixes: prompt rule 2 "The evidence must contain the term itself.", rule 3
+  "using only information from that source"; page-level source remap (WRONG_
+  SOURCE >= 50%) with GlossaryResult.source_remapped (commit 91c9604); smoke
+  script records source_remapped (commit f880245). 1493 tests passing.
+- Test run 20261128-215441 (one attempt): FAIL. Condition 2 1/6 (2/6 even if
+  Kernel counted), condition 3 3/4 = 75% wrong; conditions 1 (0/8), 4 (1/2) and
+  5 (warm median 0.89 s, run 1) passed. SVM p.26 (negative) got 3 wrong items.
+  3/16 pages differed between runs at temperature 0.
+- Decision (pre-registered rule): Phase 10 PARTIAL. structured_output.py,
+  glossary.py, get_page_chunks and glossary_smoke.py stay; no /extract endpoint.
+- Lesson: valid JSON is not true data.
+- Lesson: grammar constraints corrupt silently.
+- Lesson: Pydantic validation is all-or-nothing.
+- Lesson: a dev-set improvement did not transfer to new pages.
+- Lesson: temperature 0 is not deterministic on GPU.
+- Lesson: mechanical checks prove the evidence is real page text, not that it
+  defines the term.

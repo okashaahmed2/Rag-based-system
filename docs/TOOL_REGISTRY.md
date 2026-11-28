@@ -6,6 +6,7 @@
 | pip | Package installer | Phase 1 | Yes | Upgraded in venv | 26.3 |
 | Git + GitHub | Version control, backup, portfolio | Phase 1 | Yes | Working | 2.55.0 |
 | pydantic-settings | Typed config from env/.env | Phase 1 | Yes | Installed | 2.16.2 |
+| pydantic | Data validation (structured LLM output) | Phase 10 | Yes | Installed (declared >=2.14,<3; was transitive via pydantic-settings) | 2.14.3 |
 | pytest | Automated tests | Phase 1 | Yes (dev) | Installed | 9.2.0 |
 | logging | Logs (stdlib) | Phase 1 | Yes | Built in | - |
 | n8n | Workflow orchestration | Phase 9 | Yes | Running; workflow RAG ingest (scheduled) published on the live API | 2.14.2 |
@@ -19,7 +20,7 @@
 | huggingface-hub | Model download/cache | Phase 4 | Indirect | Installed | 2.4.0 |
 | ChromaDB | Vector store | Phase 5 | Yes | Installed | 1.5.9 (pinned >=1.5,<2) |
 | SQLite | Status tracking (stdlib) | Phase 5 | Yes | Built in | - |
-| Ollama | Local LLM server | Phase 7 | Yes | Installed (D:\Ollama\app, models in D:\Ollama\models); runs on GTX 1080 Ti (CUDA) | 0.40.18 (auto-updates; was 0.40.17) |
+| Ollama | Local LLM server | Phase 7 | Yes | Installed (D:\Ollama\app, models in D:\Ollama\models); runs on GTX 1080 Ti (CUDA) | 0.40.19 (auto-updates; was 0.40.18, 0.40.17) |
 | httpx | HTTP client for Ollama | Phase 7 | Yes | Installed (declared >=0.28,<1; was transitive via chromadb) | 0.28.1 |
 | llama3.2:3b | Default answer model (Q4_K_M, 2.0 GB, Llama 3.2 Community License) | Phase 7 | Yes | Pulled | - |
 | granite4.2:3b | Rejected candidate (thinking leak, 60-150 s answers; Apache 2.0, 2.2 GB) | Phase 7 | No | Pulled (can be removed) | - |

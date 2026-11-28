@@ -66,6 +66,14 @@
 - Phase 9 go-live (live API, workflow published, first scheduled run): COMPLETE
   (2026-11-28)
 - Phase 9 (n8n orchestration): COMPLETE
+- Phase 10 Step 0 (read-only design check + Ollama structured-output probe):
+  COMPLETE (2026-11-28)
+- Phase 10 Steps 1-2 (structured output layer + page glossary): COMPLETE
+  (commits b17bb7f, 54252e0)
+- Phase 10 Step 3 (glossary measurement): dev FAIL (run 20261128-213349),
+  diagnosis + fixes (commits 91c9604, f880245), test FAIL (run 20261128-215441)
+- Phase 10 (structured extraction): PARTIAL (2026-11-28): glossary module kept,
+  no /extract endpoint (failed the pre-registered test)
 - Next: see Next precise task
 
 ## Verified (with evidence)
@@ -454,6 +462,36 @@
   compound RAG + SVM question cited SVM notes p.32 and LACE p.1 (retrieval split
   across topics)
 - 1287 pytest tests passing
+- Phase 10 Step 0 probe (Ollama 0.40.19, llama3.2:3b): a dict format incl.
+  $defs/$ref is accepted; maxLength in the grammar silently truncated a term
+  ("stochastic gradient descent" -> "stochastic gradient"); done_reason length
+  -> broken JSON; ~70 completion tokens per item; the model invented an item on
+  sources without definitions
+- Chroma 1.5.9: get() with where {"$and": [doc_id $eq, page_number $eq]} works;
+  get() rows are not returned in chunk_index order (get_page_chunks sorts)
+- llm.py format / num_predict are keyword-only; payloads without them are
+  byte-identical to before (test compares the request bytes)
+- Phase 10 dev result (run 20261128-213349, 8 dev pages): FAIL on condition 2
+  (4/6; LACE p.1 and Lecture07 p.6 had no correct item, Lecture07 p.6's only item
+  "Gini" was wrong); conditions 1 (0/8), 3 (1/5 = 20%), 4 (1/2), 5 (warm median
+  1.04 s) passed. Labels by user + mentor
+- Phase 10 diagnosis (4 dev pages): EVIDENCE_NOT_IN_SOURCE items: WRONG_SOURCE
+  4/6 (exact text, other chunk of the same page), NOT_IN_ANY_CHUNK 2 (characters
+  changed by the model: ". . ." -> "...", formula symbols); TERM_NOT_IN_EVIDENCE
+  3 (term in the cited chunk, not in the copied evidence)
+- Phase 10 test result (run 20261128-215441, 8 test pages, one attempt): FAIL.
+  Labels: LACE p.3 2 accepted, both wrong (LACE definition not supported by its
+  evidence, a figure caption; an ablation-table row as evidence); partly_blank
+  p.1, Lecture07 p.7, Lecture07 p.10: 0 accepted (p.10: 4 blank_field drops);
+  SVM p.7 Kernel wrong (definition from the page, evidence does not support it;
+  borderline); SVM p.10 KNN correct. Negatives: Lecture07 p.9 0 accepted; SVM
+  p.26 3 accepted (K, WCSS, Group), all wrong (outside-knowledge definitions,
+  evidence "K = 1", "WCSS high.", "Group 1"). Conditions: (1) 0/8 PASS, (2) 1/6
+  FAIL (2/6 even if Kernel counted), (3) 3/4 = 75% wrong FAIL, (4) 1/2 PASS,
+  (5) warm median 0.89 s over the 8 pages of run 1 (0.81 s over all 16 runs)
+  PASS. 3/16 pages differed between the two runs at temperature 0 (dev 2/8,
+  test 1/8)
+- 1493 pytest tests passing
 
 ## Not yet verified / incomplete
 - Real log rotation at ~1 MB
@@ -496,6 +534,10 @@
   starting) and of the 22.61 s live startup (~21 s before the model load line)
 - Faithfulness of the go-live citations Phase8 p.11, SVM notes p.32 and LACE
   p.1 (page content not manually checked)
+- /extract (glossary) endpoint: not built (Phase 10 PARTIAL)
+- Glossary definition faithfulness: not checkable mechanically (check_items
+  proves the evidence is page text containing the term, not that it defines it)
+- Larger models for structured extraction: not tried
 
 ## Files and responsibilities
 - AGENTS.md / CLAUDE.md: agent rules (CLAUDE.md imports AGENTS.md)
@@ -597,6 +639,23 @@
 - n8n/workflows/rag_ingest_scheduled.json: workflow "RAG ingest (scheduled)";
   n8n/README.md (import, rules, daily run commands); tests/test_n8n_workflow.py
 - n8n/reference/: local UI exports only (git-ignored)
+- src/rag_pipeline/structured_output.py: grammar_schema, call_structured,
+  StructuredResult, StructuredStatus, InvalidReason, StructuredChatFn,
+  CONSTRAINT_KEYWORDS
+- src/rag_pipeline/glossary.py: GlossaryItemOut / GlossaryOutput models,
+  GLOSSARY_SYSTEM_PROMPT, build_glossary_messages, source_block, normalize,
+  check_items, extract_page_glossary, GlossaryStatus, RejectionReason,
+  GlossaryItem, GlossaryResult, GlossaryError (DocumentNotFoundError,
+  DocumentNotReadyError, PageNotFoundError)
+- src/rag_pipeline/vector_store.py also holds PageChunk, get_page_chunks;
+  src/rag_pipeline/llm.py also holds validate_format, validate_num_predict,
+  ChatFormat; src/rag_pipeline/config.py also holds llm_max_extraction_tokens
+  (768)
+- scripts/glossary_smoke.py: pages (page menu) / run (glossary per page,
+  --repeat), eval store only (live paths refused, exit 2), JSON results in
+  data/eval/glossary_runs/ (git-ignored)
+- tests/test_structured_output.py, tests/test_glossary.py,
+  tests/test_glossary_smoke.py
 
 ## Key decisions
 - Python 3.11 only; n8n 2.14.2 via npm -> FastAPI URL from n8n:
@@ -764,7 +823,9 @@
 - Default base URL http://127.0.0.1:11434 (measured ~2.2 s per connection
   with localhost on this machine); localhost still accepted
 - Every chat sends stream false, think false, temperature 0, num_ctx 4096,
-  num_predict 256 (single source: build_chat_payload)
+  num_predict 256 (single source: build_chat_payload); structured extraction
+  (Phase 10) passes format (grammar schema) and num_predict 768 as keyword
+  overrides, answer chats are unchanged
 - think:false is not trusted: leaked reasoning up to the last "</think>" is
   stripped and flagged in the client (model-proof)
 - Citation format [S#], sentinel NOT_FOUND (exact word, also as its own line;
@@ -848,6 +909,22 @@
   p.10, SVM notes p.7, SVM notes p.10; negative pages Lecture07 p.9, SVM notes p.26.
   Same 5 conditions, same settings. ONE attempt only: if the test set FAILS, the
   glossary module stays, no endpoint is built, and Phase 10 closes as PARTIAL.
+- Glossary on demand per page: nothing stored, no ingestion change
+- Grammar schema = shape only (constraint keywords stripped); Pydantic = shape
+  only (whole output); all limits checked per item in check_items (one bad item
+  never invalidates the page)
+- Evidence must be verbatim page text; the definition is in the source's language
+- Page-level source remap: evidence found in another single chunk of the same
+  page is accepted with that chunk's location (counted in source_remapped); no
+  cross-chunk matching
+- pydantic>=2.14,<3 declared (already installed via pydantic-settings)
+- Dev/test split with the test set locked before any fix; the one-attempt rule
+  was applied -> Phase 10 PARTIAL (2026-11-28): structured_output.py,
+  glossary.py, get_page_chunks and glossary_smoke.py stay; NO /extract endpoint
+- Lessons (Phase 10): valid JSON is not true data; grammar constraints corrupt
+  silently; Pydantic validation is all-or-nothing; a dev-set improvement did not
+  transfer to new pages; temperature 0 is not deterministic on GPU; mechanical
+  checks prove the evidence is real page text, not that it defines the term
 
 ## Open questions
 - Questions will be asked in English; document types are lecture slides and
@@ -860,6 +937,10 @@
   (Phase 13 candidate)
 - Automatic citation check (key terms/numbers of the answer present in the
   cited chunk, or an NLI model): Phase 11 candidate
+- Structured extraction revisit candidates: extractive definitions (the
+  definition must be page text), pattern-based candidates ("X = Y", "X kya
+  hai?", "X is a ..."), a larger model on 11 GB VRAM (verify first). Any retry
+  needs NEW test pages and a new pre-registered rule
 
 ## Verified versions
 Python 3.11.9 | pip 26.3 | setuptools 84.2.1 (upgraded from 65.5.0 by the
@@ -869,7 +950,8 @@ since Phase 4 Step 2b) | onnxruntime 1.31.1 |
 sentence-transformers 6.3.0 | torch 2.15.0+cpu | transformers 5.23.0 |
 tokenizers 0.23.3 | huggingface-hub 2.4.0 | chromadb 1.5.9 |
 git 2.55.0 | node 24.14.1 | npm 11.11.0 | n8n 2.14.2 | httpx 0.28.1 |
-Ollama 0.40.18 (auto-updated from 0.40.17) | llama3.2:3b | granite4.2:3b (rejected) |
+Ollama 0.40.19 (auto-updated from 0.40.18; was 0.40.17) | llama3.2:3b |
+granite4.2:3b (rejected) | pydantic 2.14.3 declared (>=2.14,<3, Phase 10) |
 fastapi 0.165.0 | starlette 1.10.0 | uvicorn 0.54.0 (declared >=0.54,<1) |
 anyio 4.16.0 | httpx2 2.16.2 (via huggingface_hub) | NVIDIA driver 582.78 (was 566.36)
 
@@ -992,7 +1074,12 @@ Windows 11, PowerShell 5.1
 - Empty-inbox scans every 5 min add job rows and log lines
 - Staging and live share logs/app.log
 - Staging runs accumulate in data/staging/ (never deleted by the script)
+- Glossary code exists but is not exposed by the API (Phase 10 PARTIAL)
+- check_items returns a 3-tuple (accepted, reasons, remapped count)
+- scripts/glossary_smoke.py prints page text, terms and definitions to the
+  console (manual script; nothing of it is logged)
 
 ## Next precise task
-Phase 10 Step 0: structured extraction (JSON validated with Pydantic): concepts and
-read-only design check.
+Phase 11 Step 0: read-only check for testing and final evaluation metrics
+(separate correct / abstained / wrong for /query; automatic citation-check
+candidate). Phase 9 open items stay open.
