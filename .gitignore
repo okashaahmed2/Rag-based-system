@@ -30,6 +30,10 @@ data/chroma/
 data/eval/
 # Staging runs of the API (scripts/run_api_staging.py): inbox copies, stores, databases
 data/staging/
+# Local test PDFs (never committed)
+data/test_pdfs/
+# Raw n8n UI exports (local reference only; the tracked workflow is n8n/workflows/)
+n8n/reference/
 *.db
 *.db-journal
 *.db-wal
